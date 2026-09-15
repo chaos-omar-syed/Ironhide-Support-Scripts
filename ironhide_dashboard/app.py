@@ -156,6 +156,8 @@ with st.sidebar:
             st.toggle("Satellite imagery", key="show_sat", help="Esri World Imagery under the map (cached tiles).")
             st.toggle("Radar blind-range rings (pulse width)", key="show_blind",
                       help="Dotted rings at the blind range c·(pulse width)/2 of each waveform mode: inside them the radar cannot detect.")
+            st.toggle("Show uncorrelated radar tracks (ADS-B, clutter) while MAVLink truth is present", key="show_free_tracks",
+                      help="Off: only tracks correlated to a MAVLink drone draw while truth is present (uncorrelated tracks always draw when there is no truth at all).")
             st.toggle("Show raw radar detections on error plots", key="show_obs",
                       help="Raw radar observations (block 103) as small ✕ marks on the track-quality plots, as observation minus target-truth errors.")
             st.toggle("Freeze display (pause updates)", key="freeze",

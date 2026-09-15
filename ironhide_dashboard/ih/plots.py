@@ -606,7 +606,10 @@ def map_fig(A: dict, P: dict) -> go.Figure:
     # NO TRUTH (live unit without a MAVLink feed): every active radar track as a grey dashed trail with its id at the
     # head — the radar is visibly working even though nothing can be correlated or graded (one legend entry)
     free = A.get("free_tracks") or {}
-    if free and ungraded_view(A):      # no TARGET truth (no feed at all, or the interceptor-only case)
+    # 2026-09-15 user: "I don't want to see random ADS-B tracks when MAVLink is up" -> the uncorrelated grey tracks draw only when there
+    # is NO MAVLink truth at all (the radar is visibly working) or the sidebar toggle "Show uncorrelated radar tracks" is on
+    show_free = bool(P.get("show_free_tracks")) or not bool(A.get("has_any_truth", A.get("has_truth", False)))
+    if free and ungraded_view(A) and show_free:
         hx, hy, ht, hcd = [], [], [], []
         for j, tid in enumerate(sorted(free)):
             tk = free[tid]

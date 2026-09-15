@@ -139,7 +139,7 @@ def _sig_common(A: dict, snap: dict, P: dict, W: int) -> tuple:
     # (and bypasses the map's 2 s re-send throttle, so the envelope's "view" never carries an old range with a new rev)
     static = P.get("frame") if P.get("frame_mode") in ("fit_flight", "fixed") else None   # a drifting engagement / follow box never forces a rebuild (the view rides the envelope)
     return (A["tgt_tid"], A.get("alt_tid"), A["itc_tid"], A["cpa"], bool(snap["ok"]), bool(snap.get("stale")), bool(A.get("has_truth", True)),
-            bool(A.get("no_tgt_truth")), W,
+            bool(A.get("no_tgt_truth")), bool(A.get("has_any_truth", A.get("has_truth", False))), bool(P.get("show_free_tracks")), W,
             L["preset"], static, P.get("frame_mode"), float(P["map_half"]), int(s.get("view_rev", 0)))
 
 
@@ -474,6 +474,7 @@ def _tick(t_now: float, hist_s: float) -> dict:
 @st.fragment(run_every=run_every)
 def live_view() -> None:
     P = {k: s[k] for k in ("map_half", "trail_s", "show_sat", "show_blind", "show_obs", "spec_window", "cpa_gate_m")}
+    P["show_free_tracks"] = bool(s.get("show_free_tracks", False))
     P["frame_mode"] = _frame_mode()
     P["role_ids"] = s.get("role_ids") or {}
     W = int(s.get("spec_window", D.STATE_DEFAULTS.get("spec_window", 2 if "spec_window"=="refresh_s" else 120)))
@@ -520,7 +521,7 @@ def live_view() -> None:
     elif D.is_live() and not A.get("has_truth", True):
         with slot:
             age = A.get("data_age")
-            bits = [f"<b>{A.get('n_tracks_active', 0)}</b> radar tracks active (grey on the map, no truth match)",
+            bits = [f"<b>{A.get('n_tracks_active', 0)}</b> radar tracks active (" + ("grey on the map, no truth match" if (s.get("show_free_tracks") or not A.get("has_any_truth", A.get("has_truth"))) else "uncorrelated ones hidden while MAVLink truth is present — sidebar › More controls") + ")",
                     f"<b>{A.get('n_adsb', 0)}</b> non-MAVLink (ADS-B) air-traffic rows ignored"]
             if age is not None and age > F.LIVE_STALE_S:
                 bits.append(f"newest document <b>{D.fmt_age(age)}</b> ago — the view is pinned to the run's last radar data")

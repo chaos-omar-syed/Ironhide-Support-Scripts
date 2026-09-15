@@ -122,6 +122,7 @@ STATE_DEFAULTS = {
     "show_blind": False,
     "show_other": True,  # legacy key (other-track scatter was removed from the map); kept so old sessions load
     "show_obs": True,  # raw obs ✕ overlay on the track-quality panel
+    "show_free_tracks": False,  # uncorrelated (ADS-B / clutter) radar tracks on the map while MAVLink truth is present (2026-09-15: off)
     "spec_window": 120,
     "cpa_gate_m": 70.0,  # a closest approach is a CPA only when sep < gate AND the pass is over (engine.cpa_gate)
     "screen": "Laptop",  # 2026-09-15 default (user on a laptop; Normal text) — sidebar "Screen size" preset -> panel height (ih.liveserver.layout)
