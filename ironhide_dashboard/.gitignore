@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/_e2e_shots/
+data/*
+!data/README.md
+*.log
+.venv/
+venv/
+.streamlit/secrets.toml
