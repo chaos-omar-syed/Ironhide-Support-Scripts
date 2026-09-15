@@ -1,32 +1,56 @@
 {
- "_comment": "Campaign config template for track_correlation/postprocess_report.py — a NEW two-day campaign (one tracking day + one engagement day) with a radar rollup. Structure copied from seawall_week_0824.json (the real 8/24 campaign). Replace every <PLACEHOLDER>; keys starting with '_comment' are ignored by the code (every read is .get()), but do NOT put them inside fixed-length list rows (flights_pdt triples, steal_examples 5-tuples, init.day, ant). Numeric placeholders (<ANT_LAT> etc.) MUST become numbers, not strings, before running. Run: cd /home/omar.syed/Test_Environment/track_correlation && micromamba run -n sensorenv python postprocess_report.py <this file>. See references/campaign-config.md for every key.",
+ "_comment": "Campaign config template for scripts/postprocess_report.py — a NEW two-day campaign (one tracking day + one engagement day) with a radar rollup. Structure copied from seawall_week_0824.json (the real 8/24 campaign). Replace every <PLACEHOLDER>; keys starting with '_comment' are ignored by the code (every read is .get()), but do NOT put them inside fixed-length list rows (flights_pdt triples, steal_examples 5-tuples, init.day, ant). Numeric placeholders (<ANT_LAT> etc.) MUST become numbers, not strings, before running. Run: cd skills/seawall-post-analysis/scripts && micromamba run -n sensorenv python postprocess_report.py <this file>. See references/campaign-config.md for every key.",
  "_comment_placeholders": {
   "<MRU>": "unit number, e.g. 91 (mongo host 10.1<MRU>.28.205)",
   "<CAMPAIGN>": "short slug for the report dir, e.g. seawall_week_0914",
   "<WEEK_ROOT>": "archive root, e.g. /home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_9-14",
   "<DATE1>/<DATE2>": "YYYY-MM-DD of the tracking / engagement day (day ids MUST be dates for the standalone link rewrite)",
   "<RUN8_A>/<RUN8_B>": "first 8 hex of the run collection for each day",
-  "<DUMP_DIR_A>/<DUMP_DIR_B>": "quickdump dirs, e.g. <WEEK_ROOT>/<DATE1>/<RUN8_A>_flight1_quickdump (mavlink/, tracks/, meta.json)",
+  "<DUMP_DIR_A>/<DUMP_DIR_B>": "dump dirs written by scripts/dump_run_window.py (<root>/<YYYY-MM-DD>/<run8>_<label>/ with mavlink/, tracks/, meta.json; old quickdump / archiver dumps are still readable). Instead of a 'dump' path any day / prep / engagement / radar_rollup day may carry a 'mongo' spec (see _comment_mongo) and the pipeline dumps it first.",
   "<ANT_LAT>,<ANT_LON>,<ANT_HAE_M>": "per-deployment antenna origin from the dump's meta.json 'antenna' (or 'antenna_origin_lat_lon_haeM') — NEVER reuse another day's",
   "<GEOID_N>": "site HAE-minus-MSL in metres (Seawall = -31.4). Must match corr_lib.GEOID_N used when the dump was written",
-  "<TARGET_CSV>": "exact target truth csv name in <dump>/mavlink/, e.g. mav14550_1_1.csv (ls the dir — the compid suffix changes)",
-  "<INTERCEPTOR_GLOB>": "interceptor truth glob, e.g. mav14551_2_*.csv (several compids are merged)",
-  "<HH:MM:SS>": "PDT clock strings (fixed UTC-7 in the code — see campaign-config.md 'Timezone')",
-  "<TRACK_ID>": "radar track id alive at the featured pass (from flights.json tracking.target_track_spans)"
+  "<TARGET_CSV>": "target truth csv name or glob in <dump>/mavlink/, e.g. mav14550_1_1.csv or mav*_1_*.csv (ls the dir — the compid suffix changes). Set once at the top level; per-day / per-engagement 'target_pattern' overrides",
+  "<INTERCEPTOR_GLOB>": "interceptor truth glob, e.g. mav14551_2_*.csv (several compids are merged). Top-level default, per-day / per-engagement override",
+  "<HH:MM:SS>": "LOCAL clock strings in the campaign 'tz' (DST-aware zoneinfo; default America/Los_Angeles = PDT/PST as appropriate)",
+  "<TRACK_ID>": "radar track id alive at the featured pass (from flights.json tracking.target_track_spans)",
+  "<TZ>": "IANA timezone of the site, e.g. America/Los_Angeles, America/Denver, Europe/Berlin"
  },
-
  "title": "Seawall Week of <M-DD> — Campaign Report",
  "sub": "MRU<MRU> · <DATE1> → <DATE2> · standard post-process pipeline: per-day reports from the two canonical modules, stitched into this rollup",
  "out_root": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/<CAMPAIGN>_report",
  "server_base": "http://172.18.1.28:8899/<CAMPAIGN>_report",
+ "tz": "<TZ>",
+ "_comment_tz": "IANA zone for EVERY clock string in this file (flights_pdt, window_pdt, cpa_seed_pdt, t_steal_pdt, t_pdt) and for every printed time; DST-aware. Default when absent: America/Los_Angeles.",
+ "target_pattern": "<TARGET_CSV>",
+ "interceptor_pattern": "<INTERCEPTOR_GLOB>",
+ "_comment_patterns": "campaign-wide truth-file globs (relative to <dump>/mavlink/). Used by tracking prep, every engagement (unless target.pattern / interceptor_pattern is given there), the radar rollup (target = LARGEST match), steal/corruption views and turn_zoom. Legend ids are derived from the files actually matched. Defaults when absent: mav14550_1_1.csv / mav14551_2_*.csv (rollup: biggest mav14550*.csv).",
+ "dump_root": "<WEEK_ROOT>",
+ "_comment_dump_root": "where 'mongo' day inputs are dumped by dump_run_window.py (default <out_root>/dumps)",
+ "_comment_mongo": {
+  "_comment": "OPTIONAL live-unit input instead of 'dump' (valid on a day, a tracking 'prep', an engagement, a radar_rollup day, steal/corruption views, turn_zoom). The pipeline runs scripts/dump_run_window.py with exactly these keys, then continues offline and writes the resolved dir back into 'dump'. An existing complete dump under <root>/<day>/<run8>_<label>/ is reused (add \"overwrite\": true to re-dump).",
+  "mongo": {
+   "mru": 43,
+   "run": "6aecec5e",
+   "jobs": "21627-23147",
+   "label": "ep1"
+  },
+  "mongo_time_window_form": {
+   "host": "10.143.28.205",
+   "run": "Lavender_Bison",
+   "t0": "2026-09-03 15:25",
+   "t1": "15:39",
+   "label": "flight1",
+   "root": "<WEEK_ROOT>",
+   "no_adsb": true
+  },
+  "_comment_keys": "mru (-> 10.1NN.28.205) or host; run = hex prefix | run_<hex> | friendly name | latest; jobs 'A-B' OR t0/t1 local time ('YYYY-MM-DD HH:MM[:SS]', or bare 'HH:MM' placed on the day's id/date); label -> folder <run8>_<label>; optional root, geoid_n, antenna [lat,lon,hae], no_adsb, no_obs, overwrite, port, db, chunk_s, max_track_range_m"
+ },
  "_comment_out_root": "out_root MUST live under the :8899 http.server root (VP_TrackAnalysis/mru91_track2895) and server_base must be its URL; optionally symlink <WEEK_ROOT>/reports/<CAMPAIGN>_report -> out_root",
-
  "rollup_html": "",
  "_comment_rollup_html": "HTML appended under the auto-built Days card table in the Overall Rollup tab: the campaign in one arc (8/24 used one <h4> + one <p>).",
-
  "days": [
   {
-   "_comment": "TRACKING day. Uses prep (synthesise mission inputs from the dump) — never bare 'mdir' (that selects the hard-coded 8/26 MRU91 structure). Exactly TWO flight windows; flight_keys F1R1/F2R1 only.",
+   "_comment": "TRACKING day. Uses prep (synthesise mission inputs from the dump) — never bare 'mdir' (that selects the hard-coded 8/26 MRU91 structure). flights_pdt takes 1..N flight windows (one fast2_F<n>.npz each); flight_keys F<n>R1 (or F<n>R<lap> with laps_pdt). The antenna is REQUIRED for a new site: init.ant (+ prep.ant_hae_m = init.ant[2]); when omitted the build reads the dump's meta.json antenna and prints a WARN, and only falls back to the MRU91 default with a loud warning.",
    "id": "<DATE1>",
    "title": "<M/D> — Tracking (2 flights)",
    "type": "tracking",
@@ -37,37 +61,62 @@
     "ant_hae_m": "<ANT_HAE_M>",
     "_comment_ant_hae_m": "number; must equal init.ant[2]",
     "flights_pdt": [
-     ["<DATE1>", "<HH:MM:SS flight 1 takeoff>", "<HH:MM:SS flight 1 landing>"],
-     ["<DATE1>", "<HH:MM:SS flight 2 takeoff>", "<HH:MM:SS flight 2 landing>"]
+     [
+      "<DATE1>",
+      "<HH:MM:SS flight 1 takeoff>",
+      "<HH:MM:SS flight 1 landing>"
+     ],
+     [
+      "<DATE1>",
+      "<HH:MM:SS flight 2 takeoff>",
+      "<HH:MM:SS flight 2 landing>"
+     ]
     ],
-    "_comment_flights_pdt": "from flights.json t0_pdt/t1_pdt; exactly two rows (init_mission loads fast2_F1 and fast2_F2 only). One real flight -> split it at a lap boundary into two rows.",
+    "_comment_flights_pdt": "from flights.json t0_pdt/t1_pdt (local clock in 'tz'); ONE row per flight, any number of flights.",
     "out_mdir": "<WEEK_ROOT>/<DATE1>/mission_prepped",
     "gate_m": 350.0,
-    "_comment_gate_m": "constant: track median-distance-to-truth gate (m) for FLIGHT_TRACKS; 350 is the standard"
+    "_comment_gate_m": "constant: track median-distance-to-truth gate (m) for FLIGHT_TRACKS; 350 is the standard",
+    "_comment_laps_pdt": "OPTIONAL lap windows keyed '<flight>,<lap>' -> one 'Flight N · Lap N' tab each (list them in flight_keys as F<flight>R<lap>); without it every flight is one lap (F<n>R1).",
+    "_comment_target_pattern": "optional per-day override of the top-level target_pattern (glob; the LARGEST match is the truth file)"
    },
    "init": {
-    "day": [2026, 9, 16],
+    "day": [
+     2026,
+     9,
+     16
+    ],
     "_comment_day": "[Y, M, D] of <DATE1> as integers",
-    "ant": ["<ANT_LAT>", "<ANT_LON>", "<ANT_HAE_M>"],
+    "ant": [
+     "<ANT_LAT>",
+     "<ANT_LON>",
+     "<ANT_HAE_M>"
+    ],
     "_comment_ant": "three numbers from meta.json antenna",
     "geoid_n": "<GEOID_N>"
    },
    "notes_html": "",
-   "_comment_notes_html": "REQUIRED non-empty in practice: '' falls back to the ORIGINAL 8/26 key-findings text. One <p><b>Key message: ...</b> ...</p> (+ optional <ul>) describing az bias, coverage, error, continuity for this day. NOTE the Summary <h2> above it is hard-coded '2026-08-26, MRU91 run Turquoise_Emu' in tracking_tab.build_summary_tab — edit the module for a new campaign.",
-   "flight_keys": ["F1R1", "F2R1"],
+   "_comment_notes_html": "NARRATIVE (analyst): one <p><b>Key message: ...</b> ...</p> (+ optional <ul>) describing az bias, coverage, error, continuity for this day. Empty -> a 'not yet written' placeholder renders (prep days never fall back to the 8/26 text). The Summary <h2> and the per-lap window line are computed from the data.",
+   "flight_keys": [
+    "F1R1",
+    "F2R1"
+   ],
    "key_message_html": "",
    "_comment_key_message_html": "Rollup card column 2, e.g. '<b>Cal applied — residual az −0.4°</b>; 25 m corrected; continuity association-limited'",
    "numbers_html": "",
    "_comment_numbers_html": "Rollup card column 3, e.g. 'Az bias: <b>−0.4°</b><br>Coverage: <b>90%</b><br>Median error: 40 m'"
   },
   {
-   "_comment": "ENGAGEMENT day. One entry per featured pass. All clock strings resolve on 'date' with the fixed UTC-7 converter.",
+   "_comment": "ENGAGEMENT day. One entry per featured pass. All clock strings resolve on 'date' in the campaign 'tz'. 'ant' is REQUIRED for a new site (else meta.json antenna with a WARN). Each engagement may carry its own 'dump' or 'mongo'; interceptor_pattern / target.pattern default to the top-level patterns; legend ids come from the truth files actually loaded. A 'fov' block is optional — missing ulog/video/ffmpeg skips ONLY the FOV section with a console note.",
    "id": "<DATE2>",
    "title": "<M/D> — Engagements (<N> flights)",
    "type": "engagement",
    "sub": "run <RUN8_B>",
    "date": "<DATE2>",
-   "ant": ["<ANT_LAT>", "<ANT_LON>", "<ANT_HAE_M>"],
+   "ant": [
+    "<ANT_LAT>",
+    "<ANT_LON>",
+    "<ANT_HAE_M>"
+   ],
    "_comment_ant": "three numbers from THIS day's meta.json antenna (per-deployment)",
    "overview_html": "",
    "_comment_overview_html": "optional: non-empty adds a leading 'Overview' tab with this HTML; '' -> no Overview tab",
@@ -81,7 +130,10 @@
       "pattern": "<TARGET_CSV>",
       "_comment": "alternative when the MAVLink truth froze: {\"traj_csv\": \"/abs/onboard_gps_traj.csv\"} with columns utc_s,lat,lon,alt_hae_m"
      },
-     "window_pdt": ["<HH:MM:SS flight start>", "<HH:MM:SS flight end>"],
+     "window_pdt": [
+      "<HH:MM:SS flight start>",
+      "<HH:MM:SS flight end>"
+     ],
      "_comment_window_pdt": "whole flight/engagement window (drives truth loading and the Overview figure), not just the pass",
      "cpa_seed_pdt": "<HH:MM:SS>",
      "_comment_cpa_seed_pdt": "from flights.json passes[].t_pdt; refined by eng_plots.cpa within +-20 s",
@@ -96,7 +148,10 @@
       "ulog": "<WEEK_ROOT>/flight_logs/<day>/Zeus/Logs/LOG00<NN>*.ulg",
       "zoff": "<ZOFF_S>",
       "video": "<WEEK_ROOT>/flight_logs/<day>/Zeus/Media/raw_camera_<yyyymmdd>_<hhmmss>.mkv",
-      "cam": {"fps": "<FPS>", "onset_frame": "<ONSET_FRAME>"},
+      "cam": {
+       "fps": "<FPS>",
+       "onset_frame": "<ONSET_FRAME>"
+      },
       "target_label": "<TARGET_ID> truth feed"
      }
     }
@@ -106,7 +161,6 @@
    "_comment_numbers_html": "e.g. 'Best CPA: <b>21 m</b><br>Passes &lt;75 m: 10 of 23<br>Track steals: <b>3</b>'"
   }
  ],
-
  "radar_rollup": {
   "_comment": "Every numeric figure here is computed at build time from 'days[].dirs'; only the *_html narratives and the example pointers are authored. The target csv in each dir MUST match mavlink/mav14550*.csv (toxic_zones.pick_truth_csvs). Omit 'az_bias_example' (it requires the legacy 8/26 mission dir).",
   "intro_html": "",
@@ -119,19 +173,29 @@
   "days": [
    {
     "label": "<M/D tracking day>",
-    "dirs": ["<DUMP_DIR_A>"],
+    "dirs": [
+     "<DUMP_DIR_A>"
+    ],
     "_comment": "scoreable day: all dump dirs of the day (merged). For a non-scoreable day use {\"label\": ..., \"scoreable\": false, \"note\": \"...\", \"az_bias_cfg\": -2.2}"
    },
    {
     "label": "<M/D engagement day>",
-    "dirs": ["<DUMP_DIR_B>"]
+    "dirs": [
+     "<DUMP_DIR_B>"
+    ]
    }
   ],
   "cell_m": 30.0,
   "min_dwell": 2,
   "_comment_cells": "constants used by the 8/24 report (heat-map cell size m, min truth samples per cell)",
   "steal_examples": [
-   ["<M/D>", "<RUN8_B>", "trk <TRACK_ID>", "<HH:MM:SS> (F1 pass <n>)", "<what happened: STOLEN by the interceptor / dragged and died / handover gap>"]
+   [
+    "<M/D>",
+    "<RUN8_B>",
+    "trk <TRACK_ID>",
+    "<HH:MM:SS> (F1 pass <n>)",
+    "<what happened: STOLEN by the interceptor / dragged and died / handover gap>"
+   ]
   ],
   "_comment_steal_examples": "narrative table rows [day, run, track, time, what] — fixed 5 elements, no _comment inside; delete rows you cannot back with data",
   "steal_views": [
@@ -141,7 +205,11 @@
     "date": "<DATE2>",
     "t_steal_pdt": "<HH:MM:SS>",
     "track_id": "<TRACK_ID>",
-    "ant": ["<ANT_LAT>", "<ANT_LON>", "<ANT_HAE_M>"],
+    "ant": [
+     "<ANT_LAT>",
+     "<ANT_LON>",
+     "<ANT_HAE_M>"
+    ],
     "interceptor_pattern": "<INTERCEPTOR_GLOB>",
     "target_pattern": "<TARGET_CSV>",
     "cap": "",
@@ -155,7 +223,11 @@
     "date": "<DATE2>",
     "t_steal_pdt": "<HH:MM:SS CPA>",
     "track_id": "<TRACK_ID>",
-    "ant": ["<ANT_LAT>", "<ANT_LON>", "<ANT_HAE_M>"],
+    "ant": [
+     "<ANT_LAT>",
+     "<ANT_LON>",
+     "<ANT_HAE_M>"
+    ],
     "interceptor_pattern": "<INTERCEPTOR_GLOB>",
     "target_pattern": "<TARGET_CSV>",
     "banner": "CPA",
@@ -169,7 +241,10 @@
    "dump": "<DUMP_DIR_A>",
    "date": "<DATE1>",
    "t_pdt": "<HH:MM:SS track death in the turn>",
-   "tracks": ["<DYING_TRACK_ID>", "<SUCCESSOR_TRACK_ID>"],
+   "tracks": [
+    "<DYING_TRACK_ID>",
+    "<SUCCESSOR_TRACK_ID>"
+   ],
    "win_s": 45,
    "label": "The far <NE> turn — run <RUN8_A> · trk <DYING_TRACK_ID> † <HH:MM:SS> PDT",
    "cap": "",

@@ -12,12 +12,26 @@ Every narrative (day key messages, engagement summaries, rollup text) lives in
 the config; the code is mission-agnostic and reusable for future events.
 
 Day inputs:
-  "dump": <archiver/quickdump dir>            use archived data (offline)
-  "mongo": {"host": .., "run": .., "t0_pdt": .., "t1_pdt": ..}
-        -> runs the standard quickdump tool first, then proceeds offline.
+  "dump": <archiver/quickdump/dump_run_window dir>   use archived data (offline)
+  "mongo": {"mru": 43 | "host": ip, "run": <hex prefix|run_<hex>|friendly>,
+            "t0": "YYYY-MM-DD HH:MM" | "HH:MM", "t1": ..  OR  "jobs": "A-B",
+            "label": str, "root": dir (opt), "no_adsb": bool (opt)}
+        -> runs scripts/dump_run_window.py first (writes <root>/<day>/<run8>_<label>/),
+           then proceeds offline; the resolved dir is stored back into "dump".
+        Valid on a day, a tracking "prep", an engagement, a radar_rollup day.
+
+Campaign-level keys (all optional, defaults reproduce the Seawall 8/24 report):
+  "tz"                  IANA zone for EVERY clock string (default America/Los_Angeles)
+  "target_pattern"      truth csv glob for the target     (default mav14550_1_1.csv;
+                        radar_rollup default: biggest mav14550*.csv)
+  "interceptor_pattern" truth csv glob for the interceptor (default mav14551_2_*.csv)
+  "dump_root"           where mongo-day dumps land (default <out_root>/dumps)
+  "geoid_n"             site HAE-MSL (m) passed to the dumper for mongo days
+  Per-day / per-engagement / per-rollup-day "target_pattern" / "interceptor_pattern"
+  override the campaign value.
 
 Day types:
-  "tracking":    tracking_tab   — Summary tab + one tab per flight/run
+  "tracking":    tracking_tab   — Summary tab + one tab per flight/run (1..N flights)
   "engagement":  engagement_tab — one tab per engagement (3-D, top-down,
                  closing distance/speed, heading error, error window, state)
 
@@ -29,41 +43,209 @@ import engagement_tab as ET
 import tracking_tab as TT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+DUMPER = os.path.join(HERE, "dump_run_window.py")
+
+# legacy (Seawall) truth-file globs — used only when neither the campaign nor the
+# day/engagement names a pattern, so old configs reproduce byte-for-byte
+LEGACY_TARGET, LEGACY_INTERCEPTOR = "mav14550_1_1.csv", "mav14551_2_*.csv"
+CAMPAIGN = dict(tz="America/Los_Angeles", target_pattern=None, interceptor_pattern=None,
+                dump_root=None, geoid_n=None, out_root=None, title="")
 
 
-def ensure_dump(day):
-    if day.get("dump"):
-        return day["dump"]
-    mg = day["mongo"]
-    out = day.get("dump_out", f"{mg['run']}_quickdump")
-    cmd = [sys.executable, os.path.join(HERE, "quickdump.py"),
-           mg["t0_pdt"], mg["t1_pdt"], out]
-    print("[mongo] quickdump:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
-    return out
+def configure(cfg):
+    """Campaign-level defaults (tz, truth patterns, dump root) -> module state +
+    the tz of the two report modules. Called by main(); call it yourself when
+    driving tracking_day_tabs / engagement_day_tabs / build_radar_rollup directly."""
+    CAMPAIGN.update(tz=cfg.get("tz") or "America/Los_Angeles",
+                    target_pattern=cfg.get("target_pattern") or None,
+                    interceptor_pattern=cfg.get("interceptor_pattern") or None,
+                    dump_root=cfg.get("dump_root") or None,
+                    geoid_n=cfg.get("geoid_n"), out_root=cfg.get("out_root"),
+                    title=cfg.get("title", ""))
+    ET.set_tz(CAMPAIGN["tz"])
+    TT.set_tz(CAMPAIGN["tz"])
+    return CAMPAIGN
+
+
+def _pat_explicit(kind, *scopes):
+    """The innermost explicit '<kind>_pattern' among scopes, then the campaign's;
+    None when nobody set one."""
+    key = f"{kind}_pattern"
+    for sc in scopes:
+        if isinstance(sc, dict) and sc.get(key):
+            return sc[key]
+    return CAMPAIGN.get(key)
+
+
+def _pat(kind, *scopes):
+    """Truth csv glob for kind in ('target', 'interceptor'): explicit > campaign > legacy."""
+    return _pat_explicit(kind, *scopes) or (LEGACY_TARGET if kind == "target" else LEGACY_INTERCEPTOR)
+
+
+def _meta_antenna(dump):
+    """Antenna origin [lat, lon, hae] from a dump's meta.json (every key spelling), or None."""
+    try:
+        meta = json.load(open(os.path.join(dump, "meta.json")))
+    except Exception:
+        return None
+    ant = (meta.get("antenna_origin_lat_lon_haeM") or meta.get("antenna_origin")
+           or meta.get("antenna"))
+    return [float(x) for x in ant[:3]] if ant and len(ant) >= 3 else None
+
+
+def _local_time_arg(v, day_hint):
+    """mongo-spec time -> dump_run_window --t0/--t1 text. Full 'YYYY-MM-DD HH:MM[:SS]'
+    passes through; a bare 'HH:MM[:SS]' or quickdump-style 'HHMM' is put on day_hint
+    (the day's id/date) so it never silently means 'today'."""
+    s = str(v).strip()
+    if re.fullmatch(r"\d{4}", s):
+        s = f"{s[:2]}:{s[2:]}"
+    if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", s):
+        if not day_hint:
+            raise ValueError(f"mongo time {v!r} has no date and the day has no id/date")
+        return f"{day_hint} {s}"
+    return s
+
+
+def dumper_cmd(mg, day_hint=None):
+    """The exact dump_run_window.py command line for one mongo spec -> (cmd, root)."""
+    cmd = [sys.executable, DUMPER]
+    if mg.get("host"):
+        cmd += ["--host", str(mg["host"])]
+    elif mg.get("mru") is not None:
+        cmd += ["--mru", str(int(mg["mru"]))]
+    else:
+        raise ValueError("mongo spec needs 'mru' or 'host'")
+    cmd += ["--run", str(mg.get("run") or "latest")]
+    if mg.get("jobs"):
+        cmd += ["--jobs", str(mg["jobs"])]
+    elif mg.get("t0") is not None and mg.get("t1") is not None:
+        cmd += ["--t0", _local_time_arg(mg["t0"], day_hint), "--t1", _local_time_arg(mg["t1"], day_hint)]
+    elif mg.get("t0_pdt") and mg.get("t1_pdt"):          # old quickdump-style keys
+        cmd += ["--t0", _local_time_arg(mg["t0_pdt"], day_hint),
+                "--t1", _local_time_arg(mg["t1_pdt"], day_hint)]
+    else:
+        raise ValueError("mongo spec needs 'jobs': 'A-B' or 't0'/'t1'")
+    if mg.get("label"):
+        cmd += ["--label", str(mg["label"])]
+    root = os.path.abspath(mg.get("root") or CAMPAIGN["dump_root"]
+                           or os.path.join(CAMPAIGN["out_root"] or ".", "dumps"))
+    cmd += ["--root", root, "--tz", str(mg.get("tz") or CAMPAIGN["tz"])]
+    gn = mg.get("geoid_n", CAMPAIGN["geoid_n"])
+    if gn is not None:
+        cmd += ["--geoid-n", str(gn)]
+    if mg.get("antenna"):
+        cmd += ["--antenna", ",".join(str(x) for x in mg["antenna"])]
+    for flag in ("no_adsb", "no_obs", "overwrite"):
+        if mg.get(flag):
+            cmd += ["--" + flag.replace("_", "-")]
+    for k in ("port", "db", "chunk_s", "max_track_range_m"):
+        if mg.get(k) is not None:
+            cmd += ["--" + k.replace("_", "-"), str(mg[k])]
+    return cmd, root
+
+
+def run_dumper(mg, day_hint=None):
+    """Run dump_run_window.py for a mongo spec (streaming its progress) and return
+    the dump directory it wrote (parsed from its 'DUMP <dir>' / 'exists: <dir>' line;
+    derived from <root>/<day>/<run8>_<label> when the line is missing)."""
+    cmd, root = dumper_cmd(mg, day_hint)
+    print("[mongo] dump_run_window:", " ".join(cmd), flush=True)
+    out_dir, lines = None, []
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in p.stdout:
+        line = line.rstrip("\n")
+        if not line.strip() or "streamlit" in line:
+            continue
+        lines.append(line)
+        print("  [dump] " + line, flush=True)
+        m = re.match(r"^\s*(?:DUMP|exists:)\s+(\S+)", line)
+        if m:
+            out_dir = m.group(1)
+    rc = p.wait()
+    if rc != 0:
+        raise RuntimeError(f"dump_run_window.py failed rc={rc}: " + " | ".join(lines[-3:]))
+    if not out_dir:
+        run = str(mg.get("run") or "")
+        run8 = (run[4:] if run.startswith("run_") else run)[:8]
+        day = day_hint or ""
+        if mg.get("t0") and re.match(r"\d{4}-\d{2}-\d{2}", str(mg["t0"])):
+            day = str(mg["t0"])[:10]
+        out_dir = os.path.join(root, day, f"{run8}_{mg.get('label', '')}".rstrip("_"))
+        print(f"  [dump] no DUMP line parsed — assuming {out_dir}")
+    if not os.path.isdir(os.path.join(out_dir, "mavlink")):
+        raise FileNotFoundError(f"dumper finished but {out_dir}/mavlink is missing")
+    return out_dir
+
+
+def ensure_dump(obj, day=None, tag="day"):
+    """Resolve the dump directory of obj (a day / prep / engagement / rollup-day
+    dict): 'dump' wins; else its own 'mongo' spec, else the enclosing day's, is
+    dumped ONCE with dump_run_window.py and the directory is written back to
+    obj['dump'] (and cached on the spec so several engagements share one dump)."""
+    if obj.get("dump"):
+        return obj["dump"]
+    mg = obj.get("mongo") or (day or {}).get("mongo")
+    if not mg:
+        raise KeyError(f"{tag}: neither 'dump' nor 'mongo' given")
+    if not mg.get("_dump"):
+        src = day or obj
+        hint = src.get("date") or (src.get("id") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(src.get("id", ""))) else None)
+        mg["_dump"] = run_dumper(mg, hint)
+    obj["dump"] = mg["_dump"]
+    return obj["dump"]
+
+
+def _resolve_ant(day, dump, tag):
+    """Antenna origin for a day: explicit config first; else the dump's meta.json
+    (loudly); else the tracking module's MRU91 default (very loudly)."""
+    ant = day.get("ant") or day.get("init", {}).get("ant")
+    if ant:
+        return tuple(float(x) for x in ant)
+    ant = _meta_antenna(dump) if dump else None
+    if ant:
+        print(f"  [WARN] {tag}: no antenna in the config — using meta.json antenna {ant} from {dump}")
+        return tuple(ant)
+    print(f"  [WARN] {tag}: NO antenna in the config or in a dump meta.json — falling back to "
+          f"tracking_tab.DEFAULT_ANT {TT.DEFAULT_ANT} (MRU91 8/26). Set init.ant / ant for a new site!")
+    return tuple(TT.DEFAULT_ANT)
 
 
 def tracking_day_tabs(day, day_dir):
     dump = None
     mdir = day.get("mdir")
     spec = None
+    tag = f"{day.get('id', '?')} (tracking)"
     if not mdir:
         pr = day["prep"]
-        dump = day.get("dump") or pr.get("dump") or ensure_dump(day)
+        dump = day.get("dump") or pr.get("dump") or ensure_dump(pr if pr.get("mongo") else day, day, tag)
+        ant = _resolve_ant(day, dump, tag)
+        ant_hae = pr.get("ant_hae_m")
+        if ant_hae is None:
+            ant_hae = ant[2]
+            print(f"  [note] {tag}: prep.ant_hae_m not set — using ant[2] = {ant_hae}")
+        elif abs(float(ant_hae) - ant[2]) > 0.5:
+            print(f"  [WARN] {tag}: prep.ant_hae_m {ant_hae} differs from ant[2] {ant[2]} — truth altitude will be off")
         flights = [(ET.epoch_pdt(d, a), ET.epoch_pdt(d, b)) for d, a, b in pr["flights_pdt"]]
+        tpat = _pat("target", pr, day)
         mdir = TT.prep_from_dump(dump, pr.get("out_mdir", f"{day_dir}/mission_inputs"),
-                                 pr["target_pattern"], flights, pr["ant_hae_m"])
+                                 tpat, flights, float(ant_hae))
         spec = {"gate_m": pr.get("gate_m", 350.0)}
         if pr.get("laps_pdt"):
             # optional lap windows {"<flight>,<lap>": [date, hms, hms]} -> tracking_tab
             # RUNS, so a prep day gets "Flight N · Lap N" tabs like the served 8/26;
-            # without them every flight is one lap (F1R1, F2R1)
+            # without them every flight is one lap (F<n>R1)
             spec["runs"] = {k: (ET.epoch_pdt(d, a), ET.epoch_pdt(d, b))
                             for k, (d, a, b) in pr["laps_pdt"].items()}
-    kw = {}
+        day.setdefault("init", {}).setdefault("ant", list(ant))
+    kw = {"tz": CAMPAIGN["tz"]}
     init = day.get("init", {})
     if "day" in init: kw["day"] = tuple(init["day"])
-    if "ant" in init: kw["ant"] = tuple(init["ant"])
+    if "ant" in init:
+        kw["ant"] = tuple(init["ant"])
+    else:
+        print(f"  [WARN] {tag}: init.ant not set — tracking_tab.DEFAULT_ANT {TT.DEFAULT_ANT} "
+              f"(MRU91 8/26) is used for the truth frame")
     if "geoid_n" in init: kw["geoid_n"] = init["geoid_n"]
     TT.init_mission(mdir, spec=spec, **kw)
     tabs = [("Summary", TT.build_summary_tab(notes_html=day.get("notes_html", "")))]
@@ -82,47 +264,57 @@ def engagement_day_tabs(day, day_dir):
     tabs = []
     if day.get("overview_html"):
         tabs.append(("Overview", day["overview_html"]))
+    date = day["date"]
     for i, eng in enumerate(day["engagements"], start=1):
-        dump = eng.get("dump") or ensure_dump(day)
-        date = day["date"]
-        t0 = ET.epoch_pdt(date, eng["window_pdt"][0])
-        t1 = ET.epoch_pdt(date, eng["window_pdt"][1])
-        tgt = eng["target"]
-        target = (ET.load_traj_csv_truth(tgt["traj_csv"], tuple(day["ant"]))
-                  if "traj_csv" in tgt else
-                  ET.load_dump_truth(dump, tgt["pattern"], t0, t1))
-        trk13 = ET.load_dump_track13(dump, eng["track_id"])
-        cfg = dict(name=eng["name"],
-                   interceptor=ET.E.drop_frozen(ET.load_dump_truth(
-                       dump, eng.get("interceptor_pattern", "mav14551_2_*.csv"), t0, t1)),
-                   target=target, track=trk13[:, :4], track_id=eng["track_id"],
-                   trkV=trk13, cpa_seed=ET.epoch_pdt(date, eng["cpa_seed_pdt"]),
-                   fov=eng.get("fov"), ant=tuple(day["ant"]),
-                   pre=eng.get("pre", 18.0), post=eng.get("post", 5.0),
-                   gif_name=eng.get("gif", f"figs/eng{i}_3d.gif"),
-                   summary_html=eng.get("summary_html",
-                       "<p>Interceptor closest approach: <b>{cpa_truth:.0f} m to target "
-                       "truth</b>, <b>{cpa_track:.0f} m to radar track {track_id}</b>.</p>"))
         label = eng.get("tab_label", f"Engagement {i}")
         try:
+            dump = ensure_dump(eng if (eng.get("dump") or eng.get("mongo")) else day, day,
+                               f"{day.get('id')} / {eng.get('name', label)}")
+            ant = _resolve_ant(day, dump, f"{day.get('id')} / {eng.get('name', label)}")
+            t0 = ET.epoch_pdt(date, eng["window_pdt"][0])
+            t1 = ET.epoch_pdt(date, eng["window_pdt"][1])
+            tgt = eng["target"]
+            ipat = _pat("interceptor", eng, day)
+            tpat = tgt.get("pattern") or _pat("target", eng, day)
+            target = (ET.load_traj_csv_truth(tgt["traj_csv"], ant)
+                      if "traj_csv" in tgt else
+                      ET.load_dump_truth(dump, tpat, t0, t1))
+            trk13 = ET.load_dump_track13(dump, eng["track_id"])
+            cfg = dict(name=eng["name"],
+                       interceptor=ET.E.drop_frozen(ET.load_dump_truth(dump, ipat, t0, t1)),
+                       target=target, track=trk13[:, :4], track_id=eng["track_id"],
+                       trkV=trk13, cpa_seed=ET.epoch_pdt(date, eng["cpa_seed_pdt"]),
+                       fov=eng.get("fov"), ant=ant,
+                       pre=eng.get("pre", 18.0), post=eng.get("post", 5.0),
+                       err_pre=eng.get("err_pre", 12.0), err_post=eng.get("err_post", 12.0),
+                       # legend ids = the truth files actually loaded
+                       interceptor_label=eng.get("interceptor_label")
+                                         or ET.id_label(ET.truth_ids(dump, ipat), "14551"),
+                       target_label=eng.get("target_label") or tgt.get("label")
+                                    or ET.id_label(ET.truth_ids(dump, tpat), "14550"),
+                       gif_name=eng.get("gif", f"figs/eng{i}_3d.gif"),
+                       summary_html=eng.get("summary_html",
+                           "<p>Interceptor closest approach: <b>{cpa_truth:.0f} m to target "
+                           "truth</b>, <b>{cpa_track:.0f} m to radar track {track_id}</b>.</p>"))
             tabs.append((label, ET.build_engagement_tab(cfg, day_dir) + eng.get("post_html", "")))
         except Exception as e:
-            print(f"  {eng['name']} skipped: {e}")
-            tabs.append((label, f"<h3>{eng['name']}</h3><p class='cap'>not buildable from "
+            print(f"  {eng.get('name', label)} skipped: {e}")
+            tabs.append((label, f"<h3>{eng.get('name', label)}</h3><p class='cap'>not buildable from "
                                 f"archived data ({e})</p>" + eng.get("post_html", "")))
     return tabs
 
 
-def _rr_day_samples(dirs):
+def _rr_day_samples(dirs, target_pattern=None, interceptor_pattern=None):
     """Moving-target-truth samples for one day (merged across its dump dirs),
     with active/turning flags — the toxic_zones standard gates throughout:
     target-side tracks = median<150 m to truth; ACTIVE = a confirmed,
     measurement-updated track sample within ±0.75 s; moving = truth ≥2.5 m/s;
-    TURNING = sustained truth heading rate > 6°/s."""
+    TURNING = sustained truth heading rate > 6°/s. target_pattern None = the
+    toxic_zones default (biggest mav14550*.csv)."""
     import toxic_zones as TZ
     out = dict(tt=[], E=[], N=[], U=[], covered=[], turning=[], paths=[], loaded=[])
     for d in dirs:
-        tgt_csv, _ = TZ.pick_truth_csvs(d)
+        tgt_csv, _ = TZ.pick_truth_csvs(d, target_pattern, interceptor_pattern)
         truth = TZ.TruthInterp(tgt_csv)
         tracks = TZ.load_target_tracks(d, truth)
         out["loaded"].append((d, truth, tracks))
@@ -296,13 +488,11 @@ def _rr_steal_gif(sv, root):
     if os.path.exists(os.path.join(root, gif)):
         print(f"  [steal] reusing {gif} (delete to re-render)")
         return gif
-    dump = sv["dump"]
+    dump = ensure_dump(sv, None, f"steal view {sv.get('label', tid)}")
     ts0 = ET.epoch_pdt(sv["date"], sv["t_steal_pdt"])
     w0, w1 = ts0 - 10.0, ts0 + 10.0
-    inter = ET.E.drop_frozen(ET.load_dump_truth(
-        dump, sv.get("interceptor_pattern", "mav14551_2_*.csv"), w0 - 15, w1 + 15))
-    targ = ET.E.drop_frozen(ET.load_dump_truth(
-        dump, sv.get("target_pattern", "mav14550_1_1.csv"), w0 - 15, w1 + 15))
+    inter = ET.E.drop_frozen(ET.load_dump_truth(dump, _pat("interceptor", sv), w0 - 15, w1 + 15))
+    targ = ET.E.drop_frozen(ET.load_dump_truth(dump, _pat("target", sv), w0 - 15, w1 + 15))
     trk = ET.load_dump_track13(dump, tid)[:, :4]
     trk = trk[(trk[:, 0] >= w0 - 2) & (trk[:, 0] <= w1 + 2)]
     if len(inter) < 4 or len(targ) < 4:
@@ -322,9 +512,13 @@ def _rr_steal_gif(sv, root):
     side = max(x1 - x0, y1 - y0)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     x0, x1, y0, y1 = cx - side / 2, cx + side / 2, cy - side / 2, cy + side / 2
-    sat = _rr_satmap({"antenna_origin_lat_lon_haeM": sv["ant"]}, x0, x1, y0, y1)
+    ant = sv.get("ant") or _meta_antenna(dump)
+    if not sv.get("ant"):
+        print(f"  [steal] trk {tid}: no 'ant' in the view — satellite tile georeference from "
+              f"{'meta.json ' + str(ant) if ant else 'NOWHERE (plain background)'}")
+    sat = _rr_satmap({"antenna_origin_lat_lon_haeM": ant}, x0, x1, y0, y1) if ant else None
 
-    PDTZ = _dt.timezone(_dt.timedelta(hours=-7))
+    PDTZ = ET.TZ                                       # campaign tz
     fig, ax = plt.subplots(figsize=(7.4, 6.9), dpi=90)
     fig.patch.set_facecolor("#fcfcfb")
     if sat:
@@ -394,7 +588,7 @@ def _rr_steal_gif(sv, root):
             else:
                 m_k.set_visible(False); lb_k.set_visible(False)
         rel = t - ts0
-        clock.set_text(f"{_dt.datetime.fromtimestamp(t, PDTZ).strftime('%H:%M:%S')} PDT · "
+        clock.set_text(f"{_dt.datetime.fromtimestamp(t, PDTZ).strftime('%H:%M:%S')} {ET.tz_abbr(t)} · "
                        f"{sv.get('rel_label', 'steal')} {rel:+.1f} s")
         flash.set_visible(abs(rel) <= 1.5 and int(t * 4) % 2 == 0)
         fig.canvas.draw()
@@ -417,15 +611,15 @@ def _rr_duel_fig(sv, root, win=30.0):
     """Distance-duel plot for one steal (the plot the static anatomy figures
     carried): the stolen track's horizontal distance to the target and to the
     interceptor, ±win s around the steal — the lines swap at the crossing."""
-    dump = sv["dump"]
+    dump = ensure_dump(sv, None, f"steal view {sv.get('label', sv['track_id'])}")
     ts0 = ET.epoch_pdt(sv["date"], sv["t_steal_pdt"])
     trk = ET.load_dump_track13(dump, sv["track_id"])[:, :4]
     m = (trk[:, 0] >= ts0 - win) & (trk[:, 0] <= ts0 + win)
     trk = trk[m]
     inter = ET.E.drop_frozen(ET.load_dump_truth(
-        dump, sv.get("interceptor_pattern", "mav14551_2_*.csv"), ts0 - win - 10, ts0 + win + 10))
+        dump, _pat("interceptor", sv), ts0 - win - 10, ts0 + win + 10))
     targ = ET.E.drop_frozen(ET.load_dump_truth(
-        dump, sv.get("target_pattern", "mav14550_1_1.csv"), ts0 - win - 10, ts0 + win + 10))
+        dump, _pat("target", sv), ts0 - win - 10, ts0 + win + 10))
     if len(trk) < 3 or len(inter) < 3 or len(targ) < 3:
         return ""
     rel = (trk[:, 0] - ts0).tolist()
@@ -465,11 +659,10 @@ def _rr_turn_zoom_fig(tz, root):
     import matplotlib.pyplot as plt
     t0 = ET.epoch_pdt(tz["date"], tz["t_pdt"])
     win = float(tz.get("win_s", 45.0))
-    targ = ET.load_dump_truth(dump := tz["dump"],
-                              tz.get("target_pattern", "mav14550_1_1.csv"),
-                              t0 - win, t0 + win)
-    PDTZ = _dt.timezone(_dt.timedelta(hours=-7))
-    ps = lambda t: _dt.datetime.fromtimestamp(t, PDTZ).strftime("%H:%M:%S")
+    dump = ensure_dump(tz, None, f"turn zoom {tz.get('label', '')}")
+    targ = ET.load_dump_truth(dump, _pat("target", tz), t0 - win, t0 + win)
+    ps = ET.hms_local                                  # campaign tz
+    abbr = ET.tz_abbr(t0)
     SURF, INK, INK2, MUTED, GRIDC, BASE = ("#fcfcfb", "#0b0b0b", "#52514e",
                                            "#898781", "#98a0ac", "#7f8791")
     rc = {"figure.facecolor": SURF, "axes.facecolor": SURF, "savefig.facecolor": SURF,
@@ -490,7 +683,7 @@ def _rr_turn_zoom_fig(tz, root):
                 continue
             died = trk[-1, 0] < t0 + 3.0 and i == 0
             ax.plot(trk[:, 1], trk[:, 2], color=pal[i % len(pal)], lw=4.0,
-                    label=f"trk {tid}" + (f" — died {ps(trk[-1, 0])} PDT in the turn"
+                    label=f"trk {tid}" + (f" — died {ps(trk[-1, 0])} {abbr} in the turn"
                                           if died else " (picks up)"))
             if died:
                 ax.plot(trk[-1, 1], trk[-1, 2], marker="x", ms=16, mew=3.5,
@@ -527,7 +720,8 @@ def build_radar_rollup(rr, root):
     import toxic_zones as TZ
     CELL = float(rr.get("cell_m", 50.0))
     MINDW = int(rr.get("min_dwell", 2))
-    ps = lambda t: _dt.datetime.fromtimestamp(t, ET.PDT).strftime("%H:%M:%S")
+    ps = ET.hms_local                                  # campaign tz (set_tz)
+    abbr = ET.tz_abbr()                                # refined below from the data
 
     # ---- one pass: load every scoreable day's dumps, compute everything -----
     daysD, rows = [], []
@@ -537,8 +731,27 @@ def build_radar_rollup(rr, root):
             rows.append(f'<tr><td>{lbl}</td><td colspan="4">'
                         f'{dspec.get("note", "not scoreable")}</td></tr>')
             continue
-        S = _rr_day_samples(dspec["dirs"])
-        meta = _json.load(open(os.path.join(dspec["dirs"][0], "meta.json")))
+        dirs = list(dspec.get("dirs") or [])
+        if not dirs and dspec.get("mongo"):
+            # live-mongo rollup day: one or several dump_run_window specs
+            specs = dspec["mongo"] if isinstance(dspec["mongo"], list) else [dspec["mongo"]]
+            for k, mg in enumerate(specs):
+                dirs.append(ensure_dump({"mongo": mg}, None, f"radar_rollup {lbl} #{k + 1}"))
+            dspec["dirs"] = dirs
+        if not dirs:
+            rows.append(f'<tr><td>{lbl}</td><td colspan="4">no dump dirs</td></tr>')
+            print(f"  [radar] {lbl}: no 'dirs' / 'mongo' — day skipped")
+            continue
+        try:
+            S = _rr_day_samples(dirs, _pat_explicit("target", dspec, rr),
+                                _pat_explicit("interceptor", dspec, rr))
+        except Exception as e:
+            rows.append(f'<tr><td>{lbl}</td><td colspan="4">not computable ({_html.escape(str(e))})</td></tr>')
+            print(f"  [radar] {lbl}: FAILED ({e}) — day skipped in the rollup")
+            continue
+        meta = _json.load(open(os.path.join(dirs[0], "meta.json")))
+        if len(S["tt"]):
+            abbr = ET.tz_abbr(float(S["tt"][0]))
         run_lbl = f'{meta.get("run_id8", meta.get("run", "?"))}'
         if meta.get("friendly_name"):
             run_lbl += f' ({meta["friendly_name"]})'
@@ -593,7 +806,17 @@ def build_radar_rollup(rr, root):
         if "day" in ini: kw["day"] = tuple(ini["day"])
         if "ant" in ini: kw["ant"] = tuple(ini["ant"])
         if "geoid_n" in ini: kw["geoid_n"] = ini["geoid_n"]
-        TT.init_mission(ex["mdir"], spec=None, **kw)
+        kw["tz"] = CAMPAIGN["tz"]
+        # spec=None (default) = the legacy 8/26 mission table (only mission_20260826).
+        # A prep-generated mission dir needs "generic": true (+ optional "laps_pdt"
+        # {"<flight>,<lap>": [date, hms, hms]} and "gate_m"), like a tracking day.
+        ex_spec = None
+        if ex.get("generic") or ex.get("laps_pdt"):
+            ex_spec = {"gate_m": ex.get("gate_m", 350.0)}
+            if ex.get("laps_pdt"):
+                ex_spec["runs"] = {k: (ET.epoch_pdt(d, a), ET.epoch_pdt(d, b))
+                                   for k, (d, a, b) in ex["laps_pdt"].items()}
+        TT.init_mission(ex["mdir"], spec=ex_spec, **kw)
         fl, rn = int(ex.get("flight", 1)), int(ex.get("run", 2))
         html += (TT.div(TT.maps_fig(fl, TT.RUNS[(fl, rn)], TT.color_of(fl)), 470)
                  + f'<p class="cap">{ex.get("caption_html", "")}</p>')
@@ -629,7 +852,7 @@ def build_radar_rollup(rr, root):
                                        ps(de["t"]), TZ.landmark(de["E"], de["N"], de["U"])))
     death_rows.sort(key=lambda r: -r[0])
     ex_rows = "".join(
-        f"<tr><td>{lb}</td><td>{run}</td><td><b>{nm}</b></td><td>{tt} PDT</td>"
+        f"<tr><td>{lb}</td><td>{run}</td><td><b>{nm}</b></td><td>{tt} {abbr}</td>"
         f"<td>{wh}</td><td>{gp:.1f} s</td></tr>"
         for gp, lb, run, nm, tt, wh in death_rows[:8])
     html += ('<p><b>Far-turn drops to investigate</b> (track deaths inside the far N/E '
@@ -646,9 +869,9 @@ def build_radar_rollup(rr, root):
             html += (f'<div class="center"><img src="{gif}" style="max-width:100%"></div>'
                      f'<p class="cap">{cv.get("cap", "")}</p>')
         tcv = ET.epoch_pdt(cv["date"], cv["t_steal_pdt"])
-        trkV = ET.load_dump_track13(cv["dump"], cv["track_id"])
-        targ_cv = ET.load_dump_truth(cv["dump"], cv.get("target_pattern", "mav14550_1_1.csv"),
-                                     tcv - 60, tcv + 60)
+        cv_dump = ensure_dump(cv, None, f"corruption view {cv.get('label', cv['track_id'])}")
+        trkV = ET.load_dump_track13(cv_dump, cv["track_id"])
+        targ_cv = ET.load_dump_truth(cv_dump, _pat("target", cv), tcv - 60, tcv + 60)
         f_ew = ET.E.err_window_fig(trkV, targ_cv, tcv, pre=12.0, post=12.0,
                                    title=f"trk {cv['track_id']} metrics through the pass — "
                                          f"az/el/range/alt error, filter ±1σ / ±3σ")
@@ -659,7 +882,7 @@ def build_radar_rollup(rr, root):
     html += "<h4>4 · Track steals on close passes</h4>" + rr.get("steals_html", "")
     if rr.get("steal_examples"):
         html += ('<table class="st"><tr><td><b>day</b></td><td><b>run</b></td>'
-                 '<td><b>track</b></td><td><b>time (PDT)</b></td><td><b>what happened</b></td></tr>'
+                 f'<td><b>track</b></td><td><b>time ({abbr})</b></td><td><b>what happened</b></td></tr>'
                  + "".join(f"<tr><td>{d}</td><td>{r}</td><td><b>{k}</b></td>"
                            f"<td>{t}</td><td>{w}</td></tr>"
                            for d, r, k, t, w in rr["steal_examples"]) + "</table>")
@@ -720,7 +943,10 @@ def build_radar_rollup(rr, root):
              + rr.get("heatmap_html", "")
              + ET.div(_rr_heat_fig(cells, sat, day_paths,
                       f"Active-track percentage around the flight pattern — "
-                      f"all scoreable days combined ({CELL:.0f} m cells)", CELL)))
+                      f"all scoreable days combined ({CELL:.0f} m cells)", CELL))
+             + ("" if (sat or not cells) else
+                '<p class="cap">Satellite imagery unavailable at build time (no HTTPS to the '
+                'Esri World_Imagery tiles) — heat map drawn on a plain background.</p>'))
     # worst cells with NON-MAX SUPPRESSION: the bad cells cluster, so without a
     # spatial separation gate every row describes the same pocket (and the same
     # long-coasting track dominates all of their windows)
@@ -760,14 +986,26 @@ def main(cfg_path):
     cfg = json.load(open(cfg_path))
     root = cfg["out_root"]
     os.makedirs(root, exist_ok=True)
+    configure(cfg)
+    print(f"=== campaign tz {CAMPAIGN['tz']} · target pattern "
+          f"{CAMPAIGN['target_pattern'] or LEGACY_TARGET + ' (legacy default)'} · interceptor pattern "
+          f"{CAMPAIGN['interceptor_pattern'] or LEGACY_INTERCEPTOR + ' (legacy default)'}")
     cards = []
     for day in cfg["days"]:
         did = day["id"]
         day_dir = os.path.join(root, did)
         os.makedirs(day_dir + "/figs", exist_ok=True)
         print(f"=== {did} ({day['type']})")
-        tabs = (tracking_day_tabs(day, day_dir) if day["type"] == "tracking"
-                else engagement_day_tabs(day, day_dir))
+        try:
+            tabs = (tracking_day_tabs(day, day_dir) if day["type"] == "tracking"
+                    else engagement_day_tabs(day, day_dir))
+        except Exception as e:
+            # a broken day (bad dump path, dumper failure, wrong pattern) must not
+            # take the campaign down: stub the page, keep building the others
+            import traceback
+            print(f"  DAY {did} FAILED: {e!r}")
+            traceback.print_exc(limit=3)
+            tabs = [("Error", f'<p class="cap">day not buildable: {_html.escape(repr(e))}</p>')]
         ET.write_page(f"{day_dir}/report.html", day["title"], day.get("sub", ""), tabs)
         # card: link text = title up to the parenthetical (so it never wraps
         # mid-phrase); the parenthetical joins the sub-line with the tab count

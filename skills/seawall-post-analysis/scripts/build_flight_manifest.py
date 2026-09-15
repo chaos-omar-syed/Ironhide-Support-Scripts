@@ -35,8 +35,9 @@ Method (also emitted in flights.json["method"] with the live parameters):
                  80 m prominence per contiguous segment (gap-edge minima with
                  one-sided prominence, and 40-80 m prominence near-misses
                  < 150 m, are kept and flagged); flagged if the
-                 interceptor is still grounded; realistic = both >= 3 m/s and
-                 closing speed >= 8 m/s
+                 interceptor is still grounded; realistic = both >= 3 m/s at the
+                 minimum and APPROACH closing speed (90th pct over the 10 s
+                 before the minimum, 2 s baselines) >= 8 m/s
   track sides  = target-side if median horiz dist to target < 150 m and
                  <= median dist to interceptor (>=3 truth-valid states);
                  interceptor-side symmetric; on-target set = target-side +
@@ -48,6 +49,17 @@ Method (also emitted in flights.json["method"] with the live parameters):
                  120 s before it sitting on craft X whose post-pass (<=120 s)
                  median distance flips to
                  within 120 m of craft Y (both directions are "track steals")
+  anomalies    = clutter (matched but never moved: path < 200 m and speed >= 2
+                 in < 50 % of matched states), drag-and-die (> 100 m off within
+                 30 s after a pass, dead within 30 s), corruption (bias-removed
+                 residual > max(2 x median, 80 m) for >= 3 s within +-10 s of a
+                 pass, then returns), pinned altitude (>= 30 s constant U while
+                 truth varies > 10 m or the track jitters > 5 m elsewhere),
+                 speed-filter kill (last state |v| > 100 or |vU| > 50 followed
+                 by a hole), feed freezes (>= 10 s listed; >= 5 s within +-30 s
+                 of a pass -> pass unreliable; moving freezes dead-reckoned)
+  kind         = per flight (engagement = interceptor airborne + a realistic
+                 pass); t0_liftoff/t1_touchdown = |vs| > 0.5 or speed > 1 edges
   metrics      = fresh on-target states: median/p90 horiz err, az-bias-removed
                  median, az/el/alt bias (medians), n_measurements = distinct
                  last_update_t, riders, handovers (rider-chain id changes with
@@ -78,7 +90,13 @@ P = dict(dedup_s=0.5, freeze_min_run=3, teleport_mps=250.0, flight_gap_s=300.0,
          side_min_n=3, rider_min_n=5, steal_pre_n=5, steal_pre_s=120.0, steal_min_age_s=10.0, steal_post_s=120.0,
          steal_r_m=120.0, real_spd_mps=3.0, real_close_mps=8.0, gap_min_s=3.0,
          turn_rate_dps=8.0, pad_agl_m=20.0, interc_near_m=200.0, apex_prom_m=500.0,
-         track_pad_s=15.0, handover_overlap_s=10.0)
+         track_pad_s=15.0, handover_overlap_s=10.0,
+         # round-2 anomaly detectors
+         freeze_flag_s=5.0, freeze_list_s=10.0, freeze_pass_win_s=30.0, rider_path_m=200.0, rider_vfrac=0.5,
+         drag_win_s=30.0, drag_off_m=100.0, drag_die_s=30.0, corr_win_s=10.0, corr_min_s=3.0, corr_floor_m=80.0,
+         pin_win_s=30.0, pin_step_m=0.5, pin_std_m=1.0, pin_truth_var_m=10.0, pin_std_else_m=5.0,
+         kill_v_mps=100.0, kill_vu_mps=50.0, kill_gap_s=5.0, close_win_s=10.0, close_base_s=2.0,
+         lift_vs_mps=0.5, lift_spd_mps=1.0)
 TZ = ZoneInfo("America/Los_Angeles")
 
 
@@ -99,7 +117,10 @@ class Feed:
         self.t = df.t_epoch.to_numpy(float)
         self.E, self.N, self.U = (df[c].to_numpy(float) for c in ("E_m", "N_m", "U_m_hae"))
         self.spd, self.vN, self.vE = (df[c].to_numpy(float) for c in ("speed_mps", "vel_n_mps", "vel_e_mps"))
+        self.vs = df.vert_spd_wire_ftmin.to_numpy(float) * 0.00508 if "vert_spd_wire_ftmin" in df.columns \
+            else (np.gradient(self.U, self.t) if len(self.t) > 1 else np.zeros(len(self.t)))
         self.ground = self.pad_ground(df) if ground is None else ground
+        self.freezes = []                       # [(t0, t1, n_rows, feed_id, dead_reckoned)] raw frozen runs (set by builders)
 
     @staticmethod
     def pad_ground(df):
@@ -193,22 +214,38 @@ def build_target(dumps, pattern):
         if s1 - s0 > P["flight_gap_s"]:
             dead |= (t > s0) & (t <= s1)
     drop = drop & dead
-    return Feed(df[~drop], "+".join(sorted(feeds)), Feed.pad_ground(df)), sorted(feeds), runs, int(drop.sum())
+    ground, kept = Feed.pad_ground(df), df[~drop].reset_index(drop=True)
+    t, fz = kept.t_epoch.to_numpy(), []
+    for s0, s1, n in runs:                      # dead-reckon MOVING freezes (flag_s .. gap_s) from the last good fix
+        dr = False
+        if P["freeze_flag_s"] <= s1 - s0 <= P["flight_gap_s"]:
+            i0 = int(np.searchsorted(t, s0))
+            if i0 < len(t) and abs(t[i0] - s0) < 1e-3 and kept.speed_mps.iloc[i0] > P["moving_mps"]:
+                m = (t > s0) & (t <= s1); dt = t[m] - t[i0]; dr = True
+                kept.loc[m, "E_m"] = kept.E_m.iloc[i0] + kept.vel_e_mps.iloc[i0] * dt
+                kept.loc[m, "N_m"] = kept.N_m.iloc[i0] + kept.vel_n_mps.iloc[i0] * dt
+                if "vert_spd_wire_ftmin" in kept.columns:
+                    kept.loc[m, "U_m_hae"] = kept.U_m_hae.iloc[i0] + kept.vert_spd_wire_ftmin.iloc[i0] * 0.00508 * dt
+        fz.append((s0, s1, n, "+".join(sorted(feeds)), dr))
+    feed = Feed(kept, "+".join(sorted(feeds)), ground); feed.freezes = fz
+    return feed, sorted(feeds), runs, int(drop.sum())
 
 
 def build_interceptor(dumps, pattern):
     feeds = collect_feeds(dumps, pattern) if pattern and pattern.lower() != "none" else {}
     if not feeds:
         return None, {}, 0
-    parts, stats = [], {}
+    parts, stats, fz = [], {}, []
     for tid, df in feeds.items():
         df = dedup(df); drop, runs = frozen_runs(df)
+        fz += [(s0, s1, n, tid, False) for s0, s1, n in runs]
         w = max(runs, key=lambda r: r[1] - r[0], default=None)
         stats[tid] = dict(rows=len(df), stale_dropped=int(drop.sum()), worst_freeze=None if w is None else
                           dict(t0_pdt=hms(w[0]), t1_pdt=hms(w[1]), dur_s=round(w[1] - w[0]), rows=w[2]))
         parts.append(df[~drop])
     merged, n_tele = drop_teleports(dedup(pd.concat(parts)))
-    return Feed(merged, "+".join(sorted(feeds))), stats, n_tele
+    feed = Feed(merged, "+".join(sorted(feeds))); feed.freezes = fz
+    return feed, stats, n_tele
 
 
 def find_flights(F: Feed):
@@ -250,7 +287,14 @@ class TrackView:
         i = itc.interp(self.t) if itc is not None else None
         self.dI = np.hypot(self.E - i["E"], self.N - i["N"]) if i else np.full(len(self.t), np.nan)
         self.on_tgt, self.on_itc = finite_lt(self.dT, P["side_r_m"]), finite_lt(self.dI, P["side_r_m"])
+        self.vE, self.vN, self.vU = (df[c].to_numpy(float) for c in ("vE_mps", "vN_mps", "vU_mps"))
+        dE, dN = self.E - self.tgt["E"], self.N - self.tgt["N"]          # error vector minus its median = residual
+        self.res = np.hypot(dE - np.nanmedian(dE), dN - np.nanmedian(dN)) if np.isfinite(dE).any() else np.full(len(self.t), np.nan)
         self.side = self.side_in(np.ones(len(self.t), bool))
+        m = self.on_tgt                                                    # rider movement gate (clutter rejection)
+        self.path_m = float(np.sum(np.hypot(np.diff(self.E[m]), np.diff(self.N[m])))) if m.sum() > 1 else 0.0
+        self.vfrac = float(np.mean(np.hypot(self.vE[m], self.vN[m]) >= P["moving_mps"])) if m.any() else 0.0
+        self.moves = self.path_m >= P["rider_path_m"] or self.vfrac >= P["rider_vfrac"]
 
     def side_in(self, m, r=None):
         """'target' / 'interceptor' / None by median horiz distance over states m."""
@@ -284,7 +328,15 @@ def cause_hint(t, grid, hrate, agl, dTI):
     return tags or ["straight cruise"]
 
 
-def find_passes(grid, T, I, itc: Feed):
+def approach_closing(sep, i):
+    """90th percentile of -d(sep)/dt over the close_win_s before minimum i, close_base_s baselines."""
+    b = int(P["close_base_s"])
+    rates = [(sep[j] - sep[j + b]) / b for j in range(max(i - int(P["close_win_s"]), 0), i - b + 1)
+             if np.isfinite(sep[j]) and np.isfinite(sep[j + b])]
+    return float(np.percentile(rates, 90)) if rates else float("nan")
+
+
+def find_passes(grid, T, I, itc: Feed, freezes=()):
     sep = np.sqrt((T["E"] - I["E"]) ** 2 + (T["N"] - I["N"]) ** 2 + (T["U"] - I["U"]) ** 2)
     horiz, valid, out = np.hypot(T["E"] - I["E"], T["N"] - I["N"]), np.isfinite(sep), []
     for seg in np.split(np.arange(len(grid)), np.where(np.diff(valid.astype(int)) != 0)[0] + 1):
@@ -303,41 +355,68 @@ def find_passes(grid, T, I, itc: Feed):
             i, j = seg[k], seg[max(k - 3, 0)]
             if sep[i] >= P["pass_max_m"]:
                 continue
-            closing = (sep[j] - sep[i]) / max(grid[i] - grid[j], 1.0)
+            closing_min = (sep[j] - sep[i]) / max(grid[i] - grid[j], 1.0)
+            closing = approach_closing(sep, i)
             grounded = bool(I["U"][i] < itc.ground + P["agl_air_m"])
             realistic = bool(min(T["spd"][i], I["spd"][i]) >= P["real_spd_mps"] and closing >= P["real_close_mps"])
+            tp = grid[i]
+            fzn = [f for f in freezes if f[1] - f[0] >= P["freeze_flag_s"] and f[0] < tp + P["freeze_pass_win_s"] and f[1] > tp - P["freeze_pass_win_s"]]
+            fz = max(fzn, key=lambda f: f[1] - f[0], default=None)
             note = ["computed offline (truth-truth 3D minimum)"]
+            if fz: note.append(f"FROZEN FEED {fz[3]} {hms(fz[0])}-{hms(fz[1])} ({fz[1] - fz[0]:.0f} s) within +-{P['freeze_pass_win_s']:.0f} s - "
+                               + ("dead-reckoned through the freeze; " if fz[4] else "") + "CPA unreliable")
             if edge: note.append("at the edge of a feed gap: one-sided prominence, true minimum may lie inside the gap")
             if prom < P["pass_prom_m"]: note.append(f"sub-prominence near-miss (prominence {prom:.0f} m < {P['pass_prom_m']:.0f} m gate; tail-chase convergence)")
             if grounded: note.append(f"interceptor still grounded (iU={I['U'][i]:.1f}) - dip vs parked interceptor")
             elif prom < 100: note.append(f"prominence {prom:.0f} m (threshold-marginal)")
             if not realistic: note.append("fails realistic gate")
             out.append(dict(n=len(out) + 1, t_pdt=hms(grid[i]), t_epoch=round(float(grid[i]), 1), miss_m=int(round(sep[i])),
-                            horiz_miss_m=int(round(horiz[i])), prominence_m=int(round(prom)), source="truth-truth",
+                            horiz_miss_m=int(round(horiz[i])), prominence_m=int(round(prom)),
+                            source="truth-truth (FROZEN FEED - unreliable)" if fz else "truth-truth",
+                            frozen_feed=None if fz is None else dict(feed=fz[3], t0_pdt=hms(fz[0]), t1_pdt=hms(fz[1]), dur_s=round(fz[1] - fz[0], 1), dead_reckoned=fz[4]),
                             interceptor_grounded=grounded, realistic=realistic, at_gap_edge=edge, sub_prominence=bool(prom < P["pass_prom_m"]),
                             tgt_speed_mps=rnd(T["spd"][i]), itc_speed_mps=rnd(I["spd"][i]),
-                            closing_speed_mps=rnd(closing), note="; ".join(note)))
+                            closing_speed_mps=rnd(closing), closing_at_min_mps=rnd(closing_min), note="; ".join(note)))
     return out
 
 
+def liftoff_edges(F: Feed, t0, t1):
+    """Extend [t0,t1] outward through contiguous samples with |vertical speed| > lift_vs or speed > lift_spd."""
+    act = (np.abs(F.vs) > P["lift_vs_mps"]) | (F.spd > P["lift_spd_mps"])
+    i = int(np.clip(np.searchsorted(F.t, t0), 0, len(F.t) - 1))
+    while i > 0 and act[i - 1] and F.t[i] - F.t[i - 1] <= 3: i -= 1
+    j = int(np.clip(np.searchsorted(F.t, t1, "right") - 1, 0, len(F.t) - 1))
+    while j < len(F.t) - 1 and act[j + 1] and F.t[j + 1] - F.t[j] <= 3: j += 1
+    return float(F.t[i]), float(F.t[j])
+
+
 def analyse_flight(t0, t1, tgt, itc, tracks, kind, itc_wins=()):
-    """Full per-flight record: segments, passes, tracking metrics, steals, issues.
-    kind: 'engagement' | 'tracking' | 'solo' (interceptor-only sortie)."""
+    """Full per-flight record: segments, passes, tracking metrics, steals, anomalies, issues.
+    kind: 'auto' (decided per flight) | 'engagement' | 'tracking' | 'solo' (interceptor-only sortie)."""
     grid = np.arange(math.ceil(t0), math.floor(t1) + 1, dtype=float)
     T = tgt.interp(grid)
     I = itc.interp(grid) if itc is not None else None
     agl, hrate, rng = T["U"] - tgt.ground, heading_rate(grid, T), np.hypot(T["E"], T["N"])
     dTI = np.hypot(T["E"] - I["E"], T["N"] - I["N"]) if I is not None else np.full(len(grid), np.nan)
-    fl = dict(n=0, t0=round(t0, 1), t1=round(t1, 1), t0_pdt=iso(t0), t1_pdt=iso(t1),
+    lo, hi = liftoff_edges(tgt, t0, t1)
+    fl = dict(n=0, kind=None, t0=round(t0, 1), t1=round(t1, 1), t0_pdt=iso(t0), t1_pdt=iso(t1),
+              t0_liftoff=round(lo, 1), t1_touchdown=round(hi, 1), t0_liftoff_pdt=hms(lo), t1_touchdown_pdt=hms(hi),
               drone_ids=[f"{tgt.name} (target)"] + ([f"{itc.name} merged (interceptor)"] if itc is not None else []),
               airborne_minutes=round((t1 - t0) / 60, 1))
 
-    # ---- segments: engagement = interceptor airborne window(s) inside the flight; loops at range troughs
+    # ---- passes first (they decide the per-flight kind), then segments
+    freezes = list(tgt.freezes) + (list(itc.freezes) if itc is not None else [])
+    eng = [w for w in itc_wins if w[0] < t1 and w[1] > t0]
+    passes = find_passes(grid, T, I, itc, freezes) if (I is not None and eng and kind != "tracking") else []
+    if kind in ("auto", "engagement"):
+        kind = "engagement" if eng and any(p["realistic"] and not p["interceptor_grounded"] for p in passes) else "tracking"
+    fl["kind"] = kind
+    fl["passes"] = passes if kind == "engagement" else []
+
     def seg(typ, k, a, b, **kw):
         return dict(type=typ, n=k, t0=round(a, 3), t1=round(b, 3), t0_pdt=iso(a), t1_pdt=iso(b), **kw)
     apex_idx, _ = find_peaks(np.where(np.isfinite(rng), rng, 0), prominence=P["apex_prom_m"])
-    eng = [w for w in itc_wins if w[0] < t1 and w[1] > t0]
-    if kind == "engagement" and eng:
+    if kind == "engagement":
         a, b = max(t0, min(w[0] for w in eng)), min(t1, max(w[1] for w in eng))
         segs = [seg("climbout/transit", 1, t0, a), seg("engagement", 1, a, b, note="interceptor airborne window"), seg("return/land", 1, b, t1)]
     elif kind == "tracking" and len(apex_idx):
@@ -347,16 +426,17 @@ def analyse_flight(t0, t1, tgt, itc, tracks, kind, itc_wins=()):
     else:
         segs = [seg("transit", 1, t0, t1)]
     fl["segments"] = segs
-    passes = fl["passes"] = find_passes(grid, T, I, itc) if (kind == "engagement" and I is not None) else []
+    passes = fl["passes"]
 
-    # ---- tracks in the (padded) window, sides, on-target set
+    # ---- tracks in the (padded) window, sides, clutter gate, on-target set
     pad = P["track_pad_s"]
     views = [TrackView(tid, df[m], tgt, itc) for tid, df in tracks.items()
              for m in [(df.t_epoch >= t0 - pad) & (df.t_epoch <= t1 + pad)] if m.any()]
-    tside = [v for v in views if v.side == "target"]
+    cand = [v for v in views if v.on_tgt.sum() >= P["rider_min_n"] and v.side != "interceptor"]
+    clutter = [v for v in cand if not v.moves]           # matched the target but never moved with it
+    tside = [v for v in views if v.side == "target" and v not in clutter]
     iside = [v for v in views if v.side == "interceptor"]
-    riders = sorted((v for v in views if v.on_tgt.sum() >= P["rider_min_n"] and v.side != "interceptor"),
-                    key=lambda v: v.span(v.on_tgt)[0])
+    riders = sorted((v for v in cand if v.moves), key=lambda v: v.span(v.on_tgt)[0])
     ontgt = list({v.id: v for v in tside + riders}.values())
 
     # ---- coverage on the 1 Hz grid (fresh on-target states of the on-target set)
@@ -376,11 +456,23 @@ def analyse_flight(t0, t1, tgt, itc, tracks, kind, itc_wins=()):
             continue
         ga, gb = grid[run[0]], grid[run[-1]]
         g = dict(t0_pdt=hms(ga), t1_pdt=hms(gb), dur_s=float(len(run)), med_spd=rnd(np.nanmedian(T["spd"][run])),
-                 min_spd=rnd(np.nanmin(T["spd"][run])), cause_hint=cause_hint(ga, grid, hrate, agl, dTI))
+                 min_spd=rnd(np.nanmin(T["spd"][run])), cause_hint=cause_hint(ga, grid, hrate, agl, dTI), _t0=ga)
         if len(run) >= 10:                       # tentative tracks forming on the drone mid-gap?
             near = {int(v.id): int(((v.t >= ga) & (v.t <= gb) & finite_lt(v.dT, 300)).sum()) for v in views}
             g["tentative_rows_nearby"] = sum(near.values()); g["tentative_ids"] = sorted(k for k, n in near.items() if n)
         gaps.append(g)
+
+    # ---- speed-filter kills: last published state runs away (|v| or |vU|), followed by a coverage hole
+    kills = []
+    for v in ontgt:
+        v3, vu = float(np.sqrt(v.vE[-1] ** 2 + v.vN[-1] ** 2 + v.vU[-1] ** 2)), float(v.vU[-1])
+        if v3 > P["kill_v_mps"] or abs(vu) > P["kill_vu_mps"]:
+            g = next((g for g in gaps if 0 <= g["_t0"] - v.t[-1] <= P["kill_gap_s"]), None)
+            if g is not None:
+                g["cause_hint"].append(f"speed-filter kill (vU={vu:.0f})")
+                kills.append(dict(track=int(v.id), last_state_pdt=hms(v.t[-1]), v_mps=rnd(v3), vU_mps=rnd(vu), hole_s=g["dur_s"], hole_t0_pdt=g["t0_pdt"]))
+    for g in gaps:
+        g.pop("_t0")
 
     # ---- accuracy metrics over fresh on-target states
     fr = [(v.E[m], v.N[m], v.U[m], v.tgt["E"][m], v.tgt["N"][m], v.tgt["U"][m], v.dT[m])
@@ -400,7 +492,11 @@ def analyse_flight(t0, t1, tgt, itc, tracks, kind, itc_wins=()):
     tr.update(meas_rate_hz=rnd(n_meas / max(t1 - t0, 1), 2), n_measurements=n_meas, fragmentation_track_count=len(ontgt),
               rider_track_ids=[int(v.id) for v in riders],
               rider_spans_pdt={str(v.id): [hms(s[0]), hms(s[1]), s[2]] for v in riders for s in [v.span(v.on_tgt)]},
-              range_apexes=[dict(t_pdt=hms(grid[i]), rng_m=round(float(rng[i]))) for i in apex_idx])
+              clutter_tracks=[dict(track=int(v.id), n_on_target=int(v.on_tgt.sum()), median_offset_m=rnd(v.med(v.dT, v.on_tgt)),
+                                   path_m=rnd(v.path_m), t0_pdt=hms(v.t[0]), t1_pdt=hms(v.t[-1])) for v in clutter],
+              range_apexes=[dict(t_pdt=hms(grid[i]), rng_m=round(float(rng[i]))) for i in apex_idx],
+              feed_freezes=[dict(feed=f[3], t0_pdt=hms(f[0]), t1_pdt=hms(f[1]), dur_s=round(f[1] - f[0], 1), rows=f[2], dead_reckoned=f[4])
+                            for f in freezes if f[1] - f[0] >= P["freeze_list_s"] and f[0] < t1 + 60 and f[1] > t0 - 60])
 
     # ---- handovers along the rider chain (riders nested inside another's span are not chain links)
     spans = sorted((*v.span(v.on_tgt)[:2], v.id) for v in riders)
@@ -415,8 +511,23 @@ def analyse_flight(t0, t1, tgt, itc, tracks, kind, itc_wins=()):
     tr.update(handovers=hand, coverage_gaps=gaps, gap_count=len(gaps),
               gap_total_s=float(sum(g["dur_s"] for g in gaps)), gap_max_s=float(max([g["dur_s"] for g in gaps] or [0])))
 
-    # ---- track steals (both directions) around each pass
-    steals = []
+    # ---- pinned altitude: >= pin_win_s of near-constant published U while truth varies or the track jitters elsewhere
+    pinned = []
+    for v in ontgt:
+        ok = np.isfinite(v.tgt["U"]); t, U, tU = v.t[ok], v.U[ok], v.tgt["U"][ok]
+        flat = np.concatenate([[False], np.abs(np.diff(U)) < P["pin_step_m"]])
+        for run in np.split(np.arange(len(t)), np.where(np.diff(flat.astype(int)) != 0)[0] + 1):
+            if not (len(run) and flat[run[0]]) or t[run[-1]] - t[run[0]] < P["pin_win_s"] or np.std(U[run]) >= P["pin_std_m"]:
+                continue
+            rest = np.ones(len(t), bool); rest[run] = False
+            std_else = float(np.std(U[rest])) if rest.sum() > 5 else 0.0
+            if np.ptp(tU[run]) > P["pin_truth_var_m"] or std_else > P["pin_std_else_m"]:
+                pinned.append(dict(track=int(v.id), t0_pdt=hms(t[run[0]]), t1_pdt=hms(t[run[-1]]), dur_s=rnd(t[run[-1]] - t[run[0]]),
+                                   U_m=rnd(np.median(U[run])), truth_alt_var_m=rnd(np.ptp(tU[run])), u_std_elsewhere_m=rnd(std_else)))
+    tr.update(pinned_altitude_tracks=pinned, speed_filter_kills=kills)
+
+    # ---- pass-related track anomalies: steals (both directions), drag-and-die, corruption
+    steals, drag, corr = [], [], []
     for p in passes:
         tp = p["t_epoch"]
         for v in views:
@@ -430,10 +541,32 @@ def analyse_flight(t0, t1, tgt, itc, tracks, kind, itc_wins=()):
                                    pre_pass_median_dist_to_interceptor_m=rnd(v.med(v.dI, pre)), pre_pass_median_dist_to_target_m=rnd(v.med(v.dT, pre)),
                                    post_pass_median_dist_to_interceptor_m=rnd(v.med(v.dI, post)), post_pass_median_dist_to_target_m=rnd(v.med(v.dT, post)),
                                    track_end_pdt=hms(v.t[-1]), label="track steal"))
+        for v in ([] if p["interceptor_grounded"] else ontgt):      # drag/corruption only at real (airborne) passes
+            pre = (v.t >= tp - P["steal_pre_s"]) & (v.t < tp) & v.on_tgt
+            if pre.sum() < P["steal_pre_n"] or v.t[-1] <= tp or v.t[0] > tp - P["steal_min_age_s"]:
+                continue
+            post = (v.t > tp) & (v.t <= tp + P["drag_win_s"]) & np.isfinite(v.dT)   # drag-and-die
+            if post.any() and np.max(v.dT[post]) > P["drag_off_m"] and not any(d["track"] == v.id for d in drag):
+                t_ex = v.t[post][np.argmax(v.dT[post] > P["drag_off_m"])]
+                if v.t[-1] <= t_ex + P["drag_die_s"]:
+                    drag.append(dict(track=int(v.id), after_pass=p["n"], pass_t_pdt=p["t_pdt"], max_offset_m=rnd(np.max(v.dT[post])),
+                                     first_exceed_pdt=hms(t_ex), track_end_pdt=hms(v.t[-1]), also_steal=False))
+            thr = max(2 * v.med(v.res, np.ones(len(v.t), bool)), P["corr_floor_m"])      # corruption: excursion that returns
+            exc = np.where(finite_lt(-v.res, -thr))[0]
+            for run in np.split(exc, np.where(np.diff(exc) > 1)[0] + 1):
+                if not len(run) or run[-1] >= len(v.t) - 1 or run[0] == 0:
+                    continue                                       # must start after birth and end before the track ends
+                ts, te = v.t[run[0]], v.t[run[-1]]
+                if abs(ts - tp) <= P["corr_win_s"] and te - ts >= P["corr_min_s"] and not any(c["track"] == v.id and c["pass_t_pdt"] == p["t_pdt"] for c in corr):
+                    corr.append(dict(track=int(v.id), pass_t_pdt=p["t_pdt"], t0_pdt=hms(ts), t1_pdt=hms(te), dur_s=rnd(te - ts),
+                                     peak_err_m=rnd(np.max(v.res[run])), threshold_m=rnd(thr)))
+    for d in drag:
+        d["also_steal"] = any(s["track"] == d["track"] for s in steals)
     if kind == "engagement":
         allm = lambda v: np.ones(len(v.t), bool)
         tr.update(interceptor_track_count=len(iside), fight_track_count=len(tside) + len(iside),
-                  fight_track_count_any_contact=sum(1 for v in views if v.on_tgt.any() or v.on_itc.any()), steal_events=steals,
+                  fight_track_count_any_contact=sum(1 for v in views if v.on_tgt.any() or v.on_itc.any()),
+                  steal_events=steals, drag_and_die=drag, corruption_events=corr,
                   target_track_spans={str(v.id): f"{hms(v.t[0])}-{hms(v.t[-1])}, med {v.med(v.dT, allm(v)):.1f} m off target" for v in tside},
                   interceptor_track_spans={str(v.id): f"{hms(v.t[0])}-{hms(v.t[-1])}, med {v.med(v.dI, allm(v)):.1f} m off interceptor" for v in iside})
     fl["tracking"] = tr
@@ -442,12 +575,26 @@ def analyse_flight(t0, t1, tgt, itc, tracks, kind, itc_wins=()):
     iss = [f"track {s['track']} TRACK STEAL ({s['direction']}) after pass {s['after_pass']} ({s['pass_t_pdt']}): post-pass median "
            f"{s['post_pass_median_dist_to_interceptor_m']} m to interceptor vs {s['post_pass_median_dist_to_target_m']} m to target; "
            f"track ended {s['track_end_pdt']}" for s in steals]
+    iss += [f"track {d['track']} DRAG-AND-DIE after pass {d['after_pass']} ({d['pass_t_pdt']}): pulled to {d['max_offset_m']} m off the target "
+            f"by {d['first_exceed_pdt']}, dead {d['track_end_pdt']}" + (" (also a track steal)" if d["also_steal"] else "") for d in drag]
+    iss += [f"track {c['track']} STATE CORRUPTION at pass {c['pass_t_pdt']}: error residual peaked {c['peak_err_m']} m for {c['dur_s']} s "
+            f"({c['t0_pdt']}-{c['t1_pdt']}) then returned; identity held" for c in corr]
     for p in passes:
+        if p["frozen_feed"]:
+            f = p["frozen_feed"]
+            iss.append(f"pass {p['n']} ({p['miss_m']} m @{p['t_pdt']}) is within +-{P['freeze_pass_win_s']:.0f} s of a FROZEN {f['feed']} feed "
+                       f"{f['t0_pdt']}-{f['t1_pdt']} ({f['dur_s']} s){' - dead-reckoned' if f['dead_reckoned'] else ''}; CPA unreliable")
         if p["interceptor_grounded"]:
             iss.append(f"pass {p['n']} ({p['miss_m']} m @{p['t_pdt']}) computed while the interceptor was still grounded - dip vs parked interceptor")
         elif not p["realistic"]:
             iss.append(f"pass {p['n']} ({p['miss_m']} m @{p['t_pdt']}) fails the realistic gate (tgt {p['tgt_speed_mps']} m/s, "
-                       f"itc {p['itc_speed_mps']} m/s, closing {p['closing_speed_mps']} m/s)")
+                       f"itc {p['itc_speed_mps']} m/s, approach closing {p['closing_speed_mps']} m/s)")
+    iss += [f"CLUTTER track {c['track']} matched the target for {c['n_on_target']} states (median {c['median_offset_m']} m) but never moved "
+            f"(path {c['path_m']} m) - excluded from riders/coverage" for c in tr["clutter_tracks"]]
+    iss += [f"track {q['track']} PINNED ALTITUDE U={q['U_m']} m for {q['dur_s']} s ({q['t0_pdt']}-{q['t1_pdt']}); truth altitude varied "
+            f"{q['truth_alt_var_m']} m, track U std elsewhere {q['u_std_elsewhere_m']} m" for q in pinned]
+    iss += [f"track {k['track']} SPEED-FILTER KILL: last state {k['last_state_pdt']} |v|={k['v_mps']} m/s vU={k['vU_mps']} m/s, "
+            f"followed by a {k['hole_s']:.0f} s coverage hole from {k['hole_t0_pdt']}" for k in kills]
     if tr["az_bias_deg"] is not None:
         iss.append(f"azimuth bias {tr['az_bias_deg']:+.2f} deg: median horiz err {tr['med_horiz_err_m']} m raw -> "
                    f"{tr['med_horiz_err_azcorr_m']} m after removing the bias")
@@ -488,11 +635,25 @@ def method_block(target_pat, itc_pat, kind):
                  + (f" or speed > {P['trim_speed_mps']} m/s" if P["trim_speed_mps"] > 0 else "")
                  + f"; windows with peak speed < {P['min_peak_mps']:.0f} m/s skipped (GPS acquisition); interceptor sorties without a target flight "
                  f"emitted as interceptor-only flights" + ("; racetrack loops split at the range trough between range apexes" if kind == "tracking" else "")),
+        anomalies=(f"clutter = >={P['rider_min_n']} on-target states but horizontal path < {P['rider_path_m']:.0f} m and track speed >= {P['moving_mps']:.0f} m/s "
+                   f"in < {P['rider_vfrac']*100:.0f}% of matched states (excluded from riders/coverage); drag-and-die = on-target track pulled > "
+                   f"{P['drag_off_m']:.0f} m within {P['drag_win_s']:.0f} s after a pass and dead within {P['drag_die_s']:.0f} s of that; corruption = "
+                   f"bias-removed error residual > max(2 x its median, {P['corr_floor_m']:.0f} m) for >= {P['corr_min_s']:.0f} s starting within "
+                   f"+-{P['corr_win_s']:.0f} s of a pass, then returning; pinned altitude = >= {P['pin_win_s']:.0f} s of published U steps < "
+                   f"{P['pin_step_m']} m (std < {P['pin_std_m']:.0f} m) while truth altitude varies > {P['pin_truth_var_m']:.0f} m or the track's U std "
+                   f"elsewhere > {P['pin_std_else_m']:.0f} m; speed-filter kill = last state |v| > {P['kill_v_mps']:.0f} or |vU| > {P['kill_vu_mps']:.0f} m/s "
+                   f"followed within {P['kill_gap_s']:.0f} s by a coverage hole; feed freezes >= {P['freeze_list_s']:.0f} s listed, >= {P['freeze_flag_s']:.0f} s "
+                   f"within +-{P['freeze_pass_win_s']:.0f} s of a pass flag it unreliable; moving target freezes ({P['freeze_flag_s']:.0f} s..{P['flight_gap_s']/60:.0f} min, "
+                   f"last good speed > {P['moving_mps']:.0f} m/s) are dead-reckoned from the last good fix"),
+        flight_kind=(f"per flight: engagement if the interceptor is airborne during the flight and a realistic, non-grounded pass exists, else tracking "
+                     f"(racetrack loops at range troughs); day type = majority of flights; t0/t1 = altitude-trimmed window, t0_liftoff/t1_touchdown = "
+                     f"first/last contiguous sample with |vertical speed| > {P['lift_vs_mps']} m/s or speed > {P['lift_spd_mps']:.0f} m/s"),
         passes=(f"1 Hz grid, 3D separation of interpolated feeds, no interpolation across >{P['interp_gap_s']} s gaps in either feed, local minima "
                 f"< {P['pass_max_m']:.0f} m with {P['pass_prom_m']:.0f} m prominence (per contiguous segment; a segment-edge minimum with one-sided "
                 f"prominence >= {P['pass_prom_m']:.0f} m is kept and flagged at_gap_edge; a {P['pass_sub_prom_m']:.0f}-{P['pass_prom_m']:.0f} m prominence "
                 f"minimum below {P['pass_sub_max_m']:.0f} m is kept and flagged sub_prominence); grounded-interceptor dips flagged; realistic = both craft "
-                f">= {P['real_spd_mps']:.0f} m/s and closing speed >= {P['real_close_mps']:.0f} m/s"),
+                f">= {P['real_spd_mps']:.0f} m/s at the minimum and approach closing speed (90th pct of -d sep/dt over the {P['close_win_s']:.0f} s "
+                f"before the minimum, {P['close_base_s']:.0f} s baselines) >= {P['real_close_mps']:.0f} m/s"),
         coverage=(f"pct of 1 Hz moving samples (U > {g5} m AND speed > {P['moving_mps']:.0f} m/s) with a fresh (t - last_update_t <= {P['fresh_s']} s) "
                   f"on-target track state within {P['cover_dt_s']} s and {P['cover_r_m']:.0f} m; coverage_pct_window = same over every truth-valid "
                   f"1 Hz sample in the flight window (hover included)"),
@@ -512,21 +673,23 @@ def write_summary(path, man, kind):
     L = [f"# Seawall {man['day']} - run {r0['run']} ({kind} day)", "",
          f"Auto-generated skeleton from build_flight_manifest.py; dumps: {', '.join(r0['dumps'])}. Antenna {r0['antenna']}. "
          "All times local. Machine-readable version: `flights.json`.", "", "## Narrative", "", "TODO: analyst narrative goes here.", "",
-         "## Flights", "", "| Flight | Window | Air min | Segments | Passes (m) | Best | Cov % (moving / window) | Med herr (raw/azcorr) | "
-         "Az bias | Tgt tracks | Riders | Steals |", "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+         "## Flights", "", "| Flight | Kind | Window (liftoff-touchdown) | Air min | Segments | Passes (m) | Best | Cov % (moving / window) | "
+         "Med herr (raw/azcorr) | Az bias | Tgt tracks | Riders | Steals |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for f in fls:
         tr, ps = f["tracking"], f["passes"]; ok = [p for p in ps if not p["interceptor_grounded"]]
-        L.append(f"| {f['n']} | {f['t0_pdt'][11:19]}-{f['t1_pdt'][11:19]} | {f['airborne_minutes']} | {', '.join(s['type'] for s in f['segments'])} | "
+        L.append(f"| {f['n']} | {f['kind']} | {f['t0_pdt'][11:19]}-{f['t1_pdt'][11:19]} ({f['t0_liftoff_pdt']}-{f['t1_touchdown_pdt']}) | "
+                 f"{f['airborne_minutes']} | {', '.join(s['type'] for s in f['segments'])} | "
                  f"{' / '.join(str(p['miss_m']) + ('*' if p['interceptor_grounded'] or not p['realistic'] or p['sub_prominence'] or p['at_gap_edge'] else '') for p in ps) or '-'} | "
                  f"{(str(min(p['miss_m'] for p in ok)) + ' m') if ok else '-'} | {tr['coverage_pct']} / {tr['coverage_pct_window']} | "
                  f"{tr['med_horiz_err_m']} / {tr['med_horiz_err_azcorr_m']} m | {tr['az_bias_deg']} | {tr['n_tracks']} | {len(tr['rider_track_ids'])} | "
                  f"{len(tr.get('steal_events', []))} |")
     L += ["", "\\* = interceptor grounded, fails the realistic gate, sub-prominence or gap-edge minimum (see pass table).", ""]
     if any(f["passes"] for f in fls):
-        L += ["## Passes", "", "| Flight | # | Time | Miss 3D | Horiz | Prom | Tgt spd | Itc spd | Closing | Grounded | Realistic | Gap edge | Sub-prom |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        L += ["## Passes", "", "| Flight | # | Time | Miss 3D | Horiz | Prom | Tgt spd | Itc spd | Closing (approach / at min) | Grounded | Realistic | Gap edge | Sub-prom | Frozen feed |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         L += [f"| {f['n']} | {p['n']} | {p['t_pdt']} | {p['miss_m']} m | {p['horiz_miss_m']} m | {p['prominence_m']} m | {p['tgt_speed_mps']} | "
-              f"{p['itc_speed_mps']} | {p['closing_speed_mps']} | {p['interceptor_grounded']} | {p['realistic']} | {p['at_gap_edge']} | {p['sub_prominence']} |"
+              f"{p['itc_speed_mps']} | {p['closing_speed_mps']} / {p['closing_at_min_mps']} | {p['interceptor_grounded']} | {p['realistic']} | {p['at_gap_edge']} | "
+              f"{p['sub_prominence']} | {(p['frozen_feed'] or {}).get('feed', '')} {(p['frozen_feed'] or {}).get('t0_pdt', '')}-{(p['frozen_feed'] or {}).get('t1_pdt', '')} |"
               for f in fls for p in f["passes"]]
         L += ["", "## Track steals", "", "| Flight | Track | Direction | After pass | Pass time | Pre med tgt/itc | Post med tgt/itc | Track end |",
               "|---|---|---|---|---|---|---|---|"]
@@ -539,6 +702,17 @@ def write_summary(path, man, kind):
         L.append(f"- **F{f['n']}** ({len(tr['rider_track_ids'])}): " + (" -> ".join(f"{k} ({v[0]}-{v[1]}, {v[2]} st)" for k, v in tr["rider_spans_pdt"].items()) or "none"))
         L += [f"  - handover {h['from_track']} -> {h['to_track']} @{h['t_pdt']}: gap {h['coverage_gap_s']} s, {'/'.join(h['cause_hint'])}, "
               f"truth {h['truth_speed_mps']} m/s @ {h['truth_range_m']} m" for h in tr["handovers"]]
+    L += ["", "## Track anomalies", ""]
+    for f in fls:
+        tr = f["tracking"]
+        items = ([f"drag-and-die trk {d['track']} after pass {d['after_pass']} ({d['pass_t_pdt']}): {d['max_offset_m']} m, dead {d['track_end_pdt']}"
+                  + (" (also steal)" if d["also_steal"] else "") for d in tr.get("drag_and_die", [])]
+                 + [f"corruption trk {c['track']} at {c['pass_t_pdt']}: {c['peak_err_m']} m for {c['dur_s']} s" for c in tr.get("corruption_events", [])]
+                 + [f"clutter trk {c['track']}: {c['n_on_target']} matched states, median {c['median_offset_m']} m, path {c['path_m']} m" for c in tr["clutter_tracks"]]
+                 + [f"pinned altitude trk {q['track']}: U={q['U_m']} m {q['t0_pdt']}-{q['t1_pdt']} ({q['dur_s']} s)" for q in tr["pinned_altitude_tracks"]]
+                 + [f"speed-filter kill trk {k['track']} @{k['last_state_pdt']} (vU={k['vU_mps']}), hole {k['hole_s']:.0f} s" for k in tr["speed_filter_kills"]]
+                 + [f"feed freeze {z['feed']} {z['t0_pdt']}-{z['t1_pdt']} ({z['dur_s']} s{', dead-reckoned' if z['dead_reckoned'] else ''})" for z in tr["feed_freezes"]])
+        L.append(f"- **F{f['n']}**: " + ("; ".join(items) if items else "none"))
     L += ["", "## Coverage gaps (>= 3 s)", "", "| Flight | Start | End | Dur s | Med spd | Min spd | Cause hint | Tentative ids |", "|---|---|---|---|---|---|---|---|"]
     L += [f"| {f['n']} | {g['t0_pdt']} | {g['t1_pdt']} | {g['dur_s']:.0f} | {g['med_spd']} | {g['min_spd']} | {'/'.join(g['cause_hint'])} | "
           f"{g.get('tentative_ids', '')} |" for f in fls for g in f["tracking"]["coverage_gaps"]]
@@ -577,13 +751,11 @@ def main():
         wins, skipped = find_flights(tgt)
     itc_wins, _ = find_flights(itc) if itc is not None else ([], [])
     solo = [] if a.windows else [w for w in itc_wins if not any(w[0] < t1 + 60 and w[1] > t0 - 60 for t0, t1 in wins)]
-    kind = a.type
-    if kind == "auto":
-        kind = "engagement" if any(w[0] < t1 and w[1] > t0 for w in itc_wins for t0, t1 in wins) else "tracking"
-    print(f"[{a.day}] run {run} kind={kind} target={tgt.name} ({len(tgt.t)} rows, ground U={tgt.ground:.1f} m) "
+    flights = [analyse_flight(w0, w1, tgt, itc, tracks, a.type, itc_wins) for w0, w1 in wins]
+    kinds = [f["kind"] for f in flights]
+    kind = a.type if a.type != "auto" else ("engagement" if kinds.count("engagement") >= max(kinds.count("tracking"), 1) else "tracking")
+    print(f"[{a.day}] run {run} day-kind={kind} flight-kinds={kinds} target={tgt.name} ({len(tgt.t)} rows, ground U={tgt.ground:.1f} m) "
           f"interceptor={itc.name if itc else None} tracks={len(tracks)} flights={len(wins)} interceptor-only={len(solo)}")
-
-    flights = [analyse_flight(w0, w1, tgt, itc, tracks, kind, itc_wins) for w0, w1 in wins]
     for w0, w1 in solo:                          # interceptor-only sorties: roles swapped
         f = analyse_flight(w0, w1, itc, None, tracks, "solo")
         f["drone_ids"] = [f"{itc.name} merged (interceptor - analysed as the tracked drone)"]
@@ -613,6 +785,10 @@ def main():
                  for k, v in itc_stats.items() if v["worst_freeze"] and v["worst_freeze"]["dur_s"] >= 60]
         day.append(f"interceptor truth: {sum(v['stale_dropped'] for v in itc_stats.values())} stale rows dropped across {'/'.join(itc_stats)}"
                    + (f" (worst: {'; '.join(worst)})" if worst else "") + f"; {n_tele} teleports >{P['teleport_mps']:.0f} m/s dropped after merge")
+    cnt = lambda key: sum(len(f["tracking"].get(key, [])) for f in flights)
+    day.append(f"track anomalies: {cnt('clutter_tracks')} clutter, {cnt('drag_and_die')} drag-and-die, {cnt('corruption_events')} corruption, "
+               f"{cnt('pinned_altitude_tracks')} pinned-altitude, {cnt('speed_filter_kills')} speed-filter kills; "
+               f"{sum(1 for f in flights for p in f['passes'] if p['frozen_feed'])} passes flagged FROZEN FEED")
     all_steals = [(f["n"], s) for f in flights for s in f["tracking"].get("steal_events", [])]
     if all_steals:
         day.append("track steals: " + ", ".join(f"F{n} trk {s['track']} ({s['direction']}, after pass {s['after_pass']})" for n, s in all_steals))
@@ -626,11 +802,14 @@ def main():
 
     for f in flights:                            # compact console summary
         tr = f["tracking"]; ps = [p for p in f["passes"] if not p["interceptor_grounded"]]
-        print(f"  F{f['n']} {f['t0_pdt'][11:19]}-{f['t1_pdt'][11:19]} ({f['airborne_minutes']} min) cov {tr['coverage_pct']}% "
+        print(f"  F{f['n']} [{f['kind']}] {f['t0_pdt'][11:19]}-{f['t1_pdt'][11:19]} (lift {f['t0_liftoff_pdt']}-{f['t1_touchdown_pdt']}, {f['airborne_minutes']} min) cov {tr['coverage_pct']}% "
               f"herr {tr['med_horiz_err_m']}/{tr['med_horiz_err_azcorr_m']} m az {tr['az_bias_deg']} el {tr['el_bias_deg']} "
               f"tgt-tracks {tr['n_tracks']} riders {len(tr['rider_track_ids'])} gaps {tr['gap_count']}/{tr['gap_total_s']:.0f}s"
               + (f" passes {[(p['t_pdt'], p['miss_m']) for p in f['passes']]} best {min(p['miss_m'] for p in ps) if ps else '-'}" if f["passes"] else "")
-              + (f" steals {[(s['track'], s['direction'], s['after_pass']) for s in tr['steal_events']]}" if tr.get("steal_events") else ""))
+              + (f" steals {[(s['track'], s['direction'], s['after_pass']) for s in tr['steal_events']]}" if tr.get("steal_events") else "")
+              + (f" drag {[d['track'] for d in tr['drag_and_die']]}" if tr.get("drag_and_die") else "") + (f" corr {[c['track'] for c in tr['corruption_events']]}" if tr.get("corruption_events") else "")
+              + (f" clutter {[c['track'] for c in tr['clutter_tracks']]}" if tr["clutter_tracks"] else "") + (f" pinned {[q['track'] for q in tr['pinned_altitude_tracks']]}" if tr["pinned_altitude_tracks"] else "")
+              + (f" kills {[k['track'] for k in tr['speed_filter_kills']]}" if tr["speed_filter_kills"] else ""))
     print(f"wrote {out}/flights.json and DAY_SUMMARY.md")
 
 

@@ -373,7 +373,7 @@ def guidance_fig(series, xlabel, t0):
     fig.update_annotations(font_size=13)
     return fig
 
-def nosedive_fig(inter, tc, title, ground=None, trk=None):
+def nosedive_fig(inter, tc, title, ground=None, trk=None, inter_label="interceptor truth"):
     """Interceptor altitude (Up) + vertical rate vs time-from-CPA, annotating the dive
     trough and the recovery. If trk (t,Up) is given, overlays the radar track's altitude
     so you can see whether the track was anywhere near the interceptor during the dive."""
@@ -381,7 +381,7 @@ def nosedive_fig(inter, tc, title, ground=None, trk=None):
     a = inter[np.argsort(inter[:,0])]; x = a[:,0]-tc; U = a[:,3]; vU = _v(a)[:,2]
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.09,
         subplot_titles=("interceptor altitude — Up about antenna (m)", "vertical rate (m/s, − = diving)"))
-    fig.add_trace(go.Scatter(x=x, y=U, mode="lines+markers", name="interceptor 14551 truth",
+    fig.add_trace(go.Scatter(x=x, y=U, mode="lines+markers", name=inter_label,
         line=dict(color=INTER, width=2.6), marker=dict(size=4),
         hovertemplate="t%{x:+.0f}s<br>Up %{y:.0f} m<extra></extra>"), row=1, col=1)
     if trk is not None and len(trk):
@@ -417,7 +417,7 @@ def nosedive_fig(inter, tc, title, ground=None, trk=None):
     fig.update_annotations(font_size=13)
     return fig
 
-def side_profile(inter, tn, title, ground=None):
+def side_profile(inter, tn, title, ground=None, inter_label="interceptor truth"):
     """SIDE elevation view: interceptor altitude (Up) vs horizontal distance along the
     path (0 = nosedive). Shows the dive-and-recover geometry from the side."""
     a = inter[np.argsort(inter[:,0])]
@@ -426,7 +426,7 @@ def side_profile(inter, tn, title, ground=None):
     arc = arc - np.interp(tn, a[:,0], arc)
     U = a[:,3]
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=arc, y=U, mode="lines+markers", name="interceptor 14551 truth",
+    fig.add_trace(go.Scatter(x=arc, y=U, mode="lines+markers", name=inter_label,
         line=dict(color=INTER, width=2.8), marker=dict(size=4),
         hovertemplate="downrange %{x:.0f} m<br>Up %{y:.0f} m<extra></extra>"))
     cand = [i for i in range(1, len(U)-1) if U[i] <= U[i-1] and U[i] <= U[i+1]

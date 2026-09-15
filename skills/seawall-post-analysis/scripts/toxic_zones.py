@@ -78,8 +78,10 @@ class TruthInterp:
     """Linear interp of target truth E/N/U, gap- and staleness-aware."""
 
     def __init__(self, csv_path):
-        df = pd.read_csv(csv_path)
-        df = df.sort_values("t_epoch").drop_duplicates("t_epoch")
+        self.path = str(csv_path)
+        self.name = os.path.basename(self.path)[:-4]          # truth id, e.g. mav14550_1_1
+        df = pd.read_csv(csv_path)          # columns by NAME: archiver / quickdump /
+        df = df.sort_values("t_epoch").drop_duplicates("t_epoch")   # dump_run_window layouts
         if "validposition" in df.columns:
             df = df[df["validposition"] != 0]
         # GPS-glitch scrub (8-27 lesson: teleports fabricate geometry):
@@ -136,12 +138,27 @@ class TruthInterp:
         return E, N, U, valid
 
 
-def pick_truth_csvs(day_dir):
-    """target = biggest mav14550*.csv; interceptors = mav14551* with >100 rows."""
+TARGET_GLOB_DEFAULT, INTERCEPTOR_GLOB_DEFAULT = "mav14550*.csv", "mav14551*.csv"   # Seawall ports
+
+
+def pick_truth_csvs(day_dir, target_pattern=None, interceptor_pattern=None):
+    """target = biggest csv matching target_pattern (default mav14550*.csv);
+    interceptors = every csv matching interceptor_pattern (default mav14551*.csv)
+    with >100 rows. Patterns are globs relative to <day_dir>/mavlink/ (a '.csv'
+    suffix is optional); the campaign config threads them here."""
     mdir = os.path.join(day_dir, "mavlink")
-    tgt = max(glob.glob(os.path.join(mdir, "mav14550*.csv")), key=os.path.getsize)
-    ints = [p for p in sorted(glob.glob(os.path.join(mdir, "mav14551*.csv")))
-            if os.path.getsize(p) > 100 * 80]
+    tp = target_pattern or TARGET_GLOB_DEFAULT
+    ip = interceptor_pattern or INTERCEPTOR_GLOB_DEFAULT
+    tp = tp if tp.endswith(".csv") or any(c in tp for c in "*?[") else tp + ".csv"
+    ip = ip if ip.endswith(".csv") or any(c in ip for c in "*?[") else ip + ".csv"
+    cands = glob.glob(os.path.join(mdir, tp))
+    if not cands:
+        have = ", ".join(sorted(os.path.basename(p) for p in glob.glob(os.path.join(mdir, "*.csv"))))
+        raise FileNotFoundError(f"no target truth csv matches {tp!r} in {mdir} "
+                                f"(present: {have or 'none'}) — set target_pattern")
+    tgt = max(cands, key=os.path.getsize)
+    ints = [p for p in sorted(glob.glob(os.path.join(mdir, ip)))
+            if os.path.getsize(p) > 100 * 80 and p != tgt]
     return tgt, ints
 
 
@@ -269,7 +286,11 @@ def landmark(E, N, alt):
 def satmap(meta, x0, x1, y0, y1):
     try:
         import live_correlator as LC
-        lat, lon = meta["antenna_origin_lat_lon_haeM"][:2]
+        ant = (meta.get("antenna_origin_lat_lon_haeM") or meta.get("antenna_origin")
+               or meta.get("antenna"))                    # every meta.json spelling
+        if not ant:
+            raise KeyError("meta.json has no antenna origin")
+        lat, lon = ant[:2]
         LC.ANT_LL[0] = (lat, lon)
         pl = LC._satmap_payload(x0, x1, y0, y1)
         return pl if pl and "img" in pl else None
@@ -322,7 +343,8 @@ def _gap_line(t, E, N, decim, gap_s=30.0):
 def path_traces(truth, interceptors, decim):
     x, y = _gap_line(truth.t, truth.E, truth.N, decim)
     tr = [{
-        "type": "scatter", "mode": "lines", "name": "target truth (mav14550)",
+        "type": "scatter", "mode": "lines",
+        "name": f"target truth ({getattr(truth, 'name', 'target')})",
         "x": x, "y": y,
         "line": {"color": TARGET_RED, "width": 1.3},
         "opacity": 0.55, "hoverinfo": "skip", "connectgaps": False}]
@@ -337,7 +359,7 @@ def path_traces(truth, interceptors, decim):
                "x": [0], "y": [0],
                "marker": {"symbol": "diamond", "size": 11, "color": "#ffffff",
                           "line": {"color": "#000000", "width": 1}},
-               "hovertext": ["MRU91 antenna"], "hoverinfo": "text"})
+               "hovertext": ["radar antenna (ENU origin)"], "hoverinfo": "text"})
     return tr
 
 
@@ -409,7 +431,8 @@ def overlay_fig(coast, deaths, sat, truth, interceptors, title, decim):
 def analyze_day(spec):
     day_dir = spec["dir"]
     meta = json.load(open(os.path.join(day_dir, "meta.json")))
-    tgt_csv, int_csvs = pick_truth_csvs(day_dir)
+    tgt_csv, int_csvs = pick_truth_csvs(day_dir, spec.get("target_pattern"),
+                                        spec.get("interceptor_pattern"))
     truth = TruthInterp(tgt_csv)
     interceptors = [(os.path.basename(p)[:-4], TruthInterp(p))
                     for p in int_csvs]
@@ -433,7 +456,7 @@ def analyze_day(spec):
                    key=lambda c: (c["cov"], -c["dwell"]))[:3]
     n_coast = int(sum(((tr["coasting"] & tr["ok"]).sum()) for tr in tracks))
     n_samp = int(sum(tr["ok"].sum() for tr in tracks))
-    stats = dict(label=spec["label"], short=spec["short"],
+    stats = dict(label=spec["label"], short=spec["short"], target_id=truth.name,
                  n_tracks=len(tracks), overall=overall, n_moving=n_mv,
                  n_deaths=len(deaths),
                  max_gap=max((d["gap"] for d in deaths), default=0.0),
@@ -448,7 +471,13 @@ def analyze_day(spec):
 
 
 # ---------------------------------------------------------------- page
-def build_html(days_out, plotly_src):
+def build_html(days_out, plotly_src, site_label="", target_label=None):
+    """Own-CLI page. site_label = e.g. 'MRU43 · Camp X' (from --site); target_label
+    defaults to the truth id(s) actually analysed."""
+    if target_label is None:
+        ids = sorted({s.get("target_id", "") for s, _ in days_out} - {""})
+        target_label = "/".join(ids) if ids else "target"
+    site_txt = f"{site_label} · " if site_label else ""
     css = """
     body{background:#101214;color:#e8e8e3;font:15px/1.55 system-ui,-apple-system,
       Segoe UI,sans-serif;margin:0;padding:0 0 60px}
@@ -477,7 +506,7 @@ def build_html(days_out, plotly_src):
              f"<script>{plotly_src}</script>",
              '<div class="wrap">',
              "<h1>Toxic zones — where target tracks go bad</h1>",
-             '<div class="sub">MRU91 · target = mav14550 drone (red '
+             f'<div class="sub">{site_txt}target = {target_label} drone (red '
              f'<span style="color:{TARGET_RED}">&#9632;</span>), interceptor blue '
              f'<span style="color:{INTERC_BLUE}">&#9632;</span> · everything below is '
              "plotted at the <b>target truth position</b>, so red = places on the "
@@ -514,13 +543,11 @@ def build_html(days_out, plotly_src):
             parts.append(
                 '<div class="findings"><b class="bad">No target-side tracks at '
                 'all this day</b> — no track ever held a median &lt; '
-                f'{MEDIAN_GATE_M:.0f} m to the mav14550 target (nearest big '
-                'track stayed &gt;1 km away). Per the 8-25 two-drone '
-                'correlation study, every track that day followed the '
-                'interceptor-role drone (mav14551_2_2, ~90–130 m error, '
-                'measurement-starved). The all-red strip below is the whole '
-                'finding: the 14550 target went untracked for the entire day, '
-                'everywhere it flew — day-level, not geolocation-specific.</div>')
+                f'{MEDIAN_GATE_M:.0f} m to the {stats.get("target_id", "target")} truth. '
+                'The all-red strip below is the whole finding: the target went '
+                'untracked for the entire day, everywhere it flew — day-level, not '
+                'geolocation-specific (check the azimuth bias / calibration, and whether '
+                'the tracks followed another aircraft).</div>')
         elif stats["worst"]:
             items = "".join(
                 f'<li><b class="bad">{c["cov"]*100:.0f}% coverage</b> at '
@@ -552,11 +579,19 @@ def main():
     ap.add_argument("--day", action="append", default=None, metavar="LABEL:DIR",
                     help="override day list (repeatable)")
     ap.add_argument("--out", default=os.path.join(OUTDIR, "report.html"))
+    ap.add_argument("--target", default=None,
+                    help=f"target truth csv glob under mavlink/ (default {TARGET_GLOB_DEFAULT}; biggest match wins)")
+    ap.add_argument("--interceptor", default=None,
+                    help=f"interceptor truth csv glob (default {INTERCEPTOR_GLOB_DEFAULT})")
+    ap.add_argument("--site", default="", help="site / unit label for the page sub-title, e.g. 'MRU43'")
     args = ap.parse_args()
     days = DAYS
     if args.day:
         days = [dict(label=s.split(":", 1)[0], short=s.split(":", 1)[0],
                      dir=s.split(":", 1)[1]) for s in args.day]
+    for d in days:
+        d.setdefault("target_pattern", args.target)
+        d.setdefault("interceptor_pattern", args.interceptor)
 
     days_out = []
     for spec in days:
@@ -573,7 +608,7 @@ def main():
         import plotly.offline as _pyo
         plotly_src = _pyo.get_plotlyjs()
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    html = build_html(days_out, plotly_src)
+    html = build_html(days_out, plotly_src, site_label=args.site)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"wrote {args.out} ({os.path.getsize(args.out)/1e6:.1f} MB)")

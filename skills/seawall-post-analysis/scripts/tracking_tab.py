@@ -49,7 +49,28 @@ GEOID_N = DEFAULT_GEOID_N
 DEFAULT_TITLE = "MRU91 Mission Report 2026-08-26"
 DEFAULT_SUB = "MRU91 two-drone-day mission report \u2014 2026-08-26 (drone mav14550_1_1)"
 
-PDT = ZoneInfo("America/Los_Angeles")
+# campaign timezone (DST-aware). init_mission(tz=...) / set_tz() switch it; PDT is
+# kept as a compatibility alias. TZ_ABBR is the zone abbreviation printed in every
+# "time (PDT)" label — refreshed by init_mission from the first flight window.
+TZ_NAME = "America/Los_Angeles"
+TZ = ZoneInfo(TZ_NAME)
+PDT = TZ
+TZ_ABBR = "PDT"
+
+
+def set_tz(name):
+    global TZ_NAME, TZ, PDT
+    TZ_NAME = str(name or "America/Los_Angeles")
+    TZ = ZoneInfo(TZ_NAME)
+    PDT = TZ
+    return TZ
+
+
+def tz_abbr(t=None):
+    dt = datetime.fromtimestamp(float(t), TZ) if t is not None else datetime.now(TZ)
+    return dt.strftime("%Z") or TZ_NAME
+
+
 INK, INK2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 BLUE, ORANGE, AQUA, YELLOW, MAGENTA, VIOLET, GREEN, RED = (
     "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#008300", "#e34948")
@@ -87,21 +108,27 @@ PAD_U = 0.0
 AGL_MIN = 20.0
 allstats = {}           # per-run stats, filled by build_flight_tab / _ensure_stats
 
-def init_mission(mdir, day=(2026, 8, 26), ant=DEFAULT_ANT, geoid_n=DEFAULT_GEOID_N, spec=None):
+def init_mission(mdir, day=(2026, 8, 26), ant=DEFAULT_ANT, geoid_n=DEFAULT_GEOID_N, spec=None,
+                 tz=None):
     """Load + prep everything the original mission_report.py did at import time.
-    Must be called before any other API function (populates the module globals)."""
-    global MDIR, DAY, ANT_LAT, ANT_LON, ANT_HAE, GEOID_N, GENERIC
+    Must be called before any other API function (populates the module globals).
+    tz: IANA zone name for every clock label (default: the current module TZ,
+    America/Los_Angeles unless set_tz() was called)."""
+    global MDIR, DAY, ANT_LAT, ANT_LON, ANT_HAE, GEOID_N, GENERIC, TZ_ABBR
     GENERIC = spec is not None
     global T, tracksV, tracks, OBS, S1
     global FLIGHTS, RUNS, LANDING, INBOUND, FLIGHT_TRACKS, PLOT_TRACKS
     global M, BIAS, DU, DU_residual, PAD_U, AGL_MIN, allstats
+    if tz:
+        set_tz(tz)
     MDIR = str(mdir)
     DAY = tuple(day)
     ANT_LAT, ANT_LON, ANT_HAE = ant
     GEOID_N = geoid_n
     allstats = {}
     # ---------- load ----------
-    # truth WITH MAVLink-reported velocities: t,E,N,U,spd,vN,vE,vUp (8 cols)
+    # truth WITH MAVLink-reported velocities: t,E,N,U,spd,vN,vE,vUp (8 cols);
+    # prep_from_dump (>= 2026-09-15) appends lat,lon (deg) as cols 8,9
     T = np.load(f"{MDIR}/truthv.npz")["truth"]
     T = T[np.argsort(T[:, 0])]
 
@@ -109,21 +136,34 @@ def init_mission(mdir, day=(2026, 8, 26), ant=DEFAULT_ANT, geoid_n=DEFAULT_GEOID
     # same frame the radar track state lives in). The AIR_TRAFFIC feed reports lat/lon
     # (deg), `altitude` in FEET MSL, and `vertical_speed` in FEET/MIN (per chaotic
     # nexus_air_traffic_utils.py: FEET_TO_METERS, altitude_ft, feet_per_minute_to_meter_
-    # per_sec). truthv carries the extraction's equirectangular E/N and U = altitude_ft
-    # - antenna_HAE. Recover geodetic (exact inverse of the equirect projection) + the
-    # feet-MSL altitude, then rebuild E/N/U with pymap3d.geodetic2enu.
-    import pymap3d as _pm
-    _k = math.cos(math.radians(ANT_LAT))
-    _lat = ANT_LAT + T[:, 2] / 111320.0
-    _lon = ANT_LON + T[:, 1] / (111320.0 * _k)
+    # per_sec). U = altitude_ft - antenna_HAE in both layouts.
     _alt_hae = (T[:, 3] + ANT_HAE) * 0.3048 + GEOID_N          # ft MSL -> m MSL -> m HAE
-    _e, _n, _u = _pm.geodetic2enu(_lat, _lon, _alt_hae, ANT_LAT, ANT_LON, ANT_HAE)
+    if T.shape[1] >= 10:
+        # prep_from_dump layout: geodetic lat/lon carried through -> EXACT WGS-84 ENU
+        # (corr_lib.EnuFrame). The legacy inverse below would treat the dump's exact
+        # E/N as equirectangular and compress N by ~0.36 % (14 m at 4 km).
+        _e, _n, _u = C.EnuFrame((ANT_LAT, ANT_LON, ANT_HAE)).enu(T[:, 8], T[:, 9], _alt_hae)
+        T = T[:, :8].copy()
+    else:
+        # legacy 8/26 extraction: truthv carries equirectangular E/N — recover geodetic
+        # (exact inverse of that projection), then rebuild E/N/U with pymap3d.geodetic2enu
+        import pymap3d as _pm
+        _k = math.cos(math.radians(ANT_LAT))
+        _lat = ANT_LAT + T[:, 2] / 111320.0
+        _lon = ANT_LON + T[:, 1] / (111320.0 * _k)
+        _e, _n, _u = _pm.geodetic2enu(_lat, _lon, _alt_hae, ANT_LAT, ANT_LON, ANT_HAE)
     T[:, 1], T[:, 2], T[:, 3] = _e, _n, _u
     T[:, 7] = T[:, 7] * 0.3048 / 60.0                           # vertical_speed ft/min -> m/s
-    # v2 extraction: 13-col tracks (t,E,N,U,vE,vN,vU,sE,sN,sU,assoc,state,lu) + raw obs
-    V1, V2 = np.load(f"{MDIR}/fast2_F1.npz"), np.load(f"{MDIR}/fast2_F2.npz")
+    # v2 extraction: 13-col tracks (t,E,N,U,vE,vN,vU,sE,sN,sU,assoc,state,lu) + raw obs,
+    # one fast2_F<n>.npz per flight (n = 1..N; the legacy 8/26 mission has exactly two)
+    import glob as _glob
+    _fz = sorted(_glob.glob(f"{MDIR}/fast2_F*.npz"),
+                 key=lambda p: int(re.search(r"fast2_F(\d+)\.npz$", p).group(1)))
+    if not _fz:
+        raise FileNotFoundError(f"{MDIR}/fast2_F<n>.npz — no flight bundles")
+    _V = {int(re.search(r"fast2_F(\d+)\.npz$", p).group(1)): np.load(p) for p in _fz}
     tracksV = {}
-    for Z in (V1, V2):
+    for Z in _V.values():
         for k in Z.files:
             if k.startswith("trk_"):
                 tid = int(k[4:])
@@ -132,7 +172,7 @@ def init_mission(mdir, day=(2026, 8, 26), ant=DEFAULT_ANT, geoid_n=DEFAULT_GEOID
     tracksV = {k: v[np.argsort(v[:, 0])] for k, v in tracksV.items()}
     # 10-col view for the existing matching pipeline (lu at col 7)
     tracks = {k: v[:, [0, 1, 2, 3, 7, 8, 9, 12, 10, 11]] for k, v in tracksV.items()}
-    OBS = {1: V1["obs"], 2: V2["obs"]}     # t, az_rad, el_rad, rng_m, dop, snr
+    OBS = {fi: Z["obs"] for fi, Z in _V.items()}     # t, az_rad, el_rad, rng_m, dop, snr
     S1 = json.load(open(f"{MDIR}/analysis_stage1.json"))
 
     if spec is None:
@@ -193,9 +233,11 @@ def init_mission(mdir, day=(2026, 8, 26), ant=DEFAULT_ANT, geoid_n=DEFAULT_GEOID
     print(f"global az bias {BIAS:+.2f} deg; RAW vertical residual (track-truth) "
           f"{DU_residual:+.0f} m (NOT removed; DU=0)")
 
+    TZ_ABBR = tz_abbr(min(w[0] for w in FLIGHTS.values())) if FLIGHTS else tz_abbr()
+
     # user-requested clamp: truth only while airborne above 20 m AGL.
     # AGL reference = parked truth altitude at the pad (pre-takeoff samples).
-    parked = T[(T[:, 4] < 1.0) & (T[:, 0] < FLIGHTS[1][0])]
+    parked = T[(T[:, 4] < 1.0) & (T[:, 0] < min(w[0] for w in FLIGHTS.values()))]
     PAD_U = float(np.median(parked[:, 3])) if len(parked) else float(np.percentile(T[:, 3], 3))
     AGL_MIN = 20.0
     n_before = len(T)
@@ -426,7 +468,7 @@ def angle_fig(fl, w, colors, which):
     fig.update_layout(**LAYOUT)
     lim = min(4.0, max(1.0, math.ceil(max(lims) * 1.15 / 0.5) * 0.5)) if lims else 2.0
     fig.update_yaxes(title=f"{which} error (deg)", dtick=0.5, range=[-lim, lim])
-    fig.update_xaxes(title="time (PDT)")
+    fig.update_xaxes(title=f"time ({TZ_ABBR})")
     return fig
 
 def enu3d_fig(fl, w, colors):
@@ -457,7 +499,7 @@ def enu3d_fig(fl, w, colors):
     lim = min(400, max(60, np.percentile(np.concatenate(e3all), 99) * 1.2)) if e3all else 200
     fig.update_yaxes(title="3D ENU error (m) — RAW (truth alt datum removed)",
                      range=[-lim * 0.4, lim])
-    fig.update_xaxes(title="time (PDT)")
+    fig.update_xaxes(title=f"time ({TZ_ABBR})")
     return fig
 
 def vel_fig(fl, w, colors):
@@ -497,7 +539,7 @@ def vel_fig(fl, w, colors):
     lim = (min(45, max(8, np.percentile(np.concatenate(dvall), 99.5) * 1.3))
            if dvall else 15)
     fig.update_yaxes(title="velocity error (m/s) — RAW", range=[-lim * 0.15, lim])
-    fig.update_xaxes(title="time (PDT)")
+    fig.update_xaxes(title=f"time ({TZ_ABBR})")
     return fig
 
 def rate_fig(fl, w, colors):
@@ -534,7 +576,7 @@ def rate_fig(fl, w, colors):
             if len(allft) else None)
     fig.update_layout(**LAYOUT, annotations=[note] if note else [])
     fig.update_yaxes(title="Hz", range=[0, 2.3])
-    fig.update_xaxes(title="time (PDT)")
+    fig.update_xaxes(title=f"time ({TZ_ABBR})")
     return fig
 
 SEQ_STEPS = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
@@ -924,7 +966,7 @@ def angle_stack(fl, w, colors):
                               bgcolor="rgba(255,255,255,0.85)",
                               text=txt))
     fig.update_layout(**LAYOUT, annotations=notes, height=980,
-        xaxis=dict(anchor="y4", title="time (PDT)"),
+        xaxis=dict(anchor="y4", title=f"time ({TZ_ABBR})"),
         yaxis=dict(domain=DOM["az"], range=[-L["az"], L["az"]], dtick=DT["az"], title="az err (deg)"),
         yaxis2=dict(domain=DOM["el"], range=[-L["el"], L["el"]], dtick=DT["el"], title="el err (deg)"),
         yaxis3=dict(domain=DOM["rng"], range=[-L["rng"], L["rng"]], dtick=DT["rng"], title="range err (m)"),
@@ -1006,7 +1048,7 @@ def posvel_fig(fl, w, colors):
     else:
         vl = 15
     fig.update_layout(**LAYOUT, annotations=notes,
-        xaxis=dict(anchor="y2", title="time (PDT)"),
+        xaxis=dict(anchor="y2", title=f"time ({TZ_ABBR})"),
         yaxis=dict(domain=[0.56, 1], rangemode="tozero", title="3D pos error (m)"),
         yaxis2=dict(domain=[0, 0.44], range=[0, vl],
                     title="horizontal |Δv| (m/s)"))
@@ -1043,7 +1085,7 @@ def timeline_html(fl):
     rows = "".join(f"<tr><td>{ps(t)}</td><td>{k}</td>"
                    f"<td style='text-align:left'>{d}</td></tr>"
                    for t, k, d in timeline(fl))
-    return (f"<table class='tl'><tr><th>time (PDT)</th><th>event</th><th>detail</th></tr>"
+    return (f"<table class='tl'><tr><th>time ({TZ_ABBR})</th><th>event</th><th>detail</th></tr>"
             f"{rows}</table>")
 
 # ---------- per-run stats ----------
@@ -1114,7 +1156,14 @@ def build_flight_tab(flight_key):
     s = run_stats(fl, w)
     allstats[(fl, rn)] = s
     inbound_note = ""
-    parts = [f"<p><b>Window:</b> {ps(w[0])}–{ps(w[1])} PDT · outbound to ~3.9 km and back · "
+    if GENERIC:
+        # leg description from the data: truth ground range inside the window
+        _tw = win(T, w)
+        _r = np.hypot(_tw[:, 1], _tw[:, 2]) if len(_tw) else np.array([0.0])
+        leg_txt = f"truth range {_r.min() / 1000:.1f}–{_r.max() / 1000:.1f} km"
+    else:
+        leg_txt = "outbound to ~3.9 km and back"          # legacy 8/26 mission text
+    parts = [f"<p><b>Window:</b> {ps(w[0])}–{ps(w[1])} {TZ_ABBR} · {leg_txt} · "
              f"<b>horiz err med/p95 (RAW):</b> {s['horiz_med']:.0f} / {s['horiz_p95']:.0f} m · "
              f"<b>3D ENU med/p95:</b> {s['e3d_med']:.0f} / {s['e3d_p95']:.0f} m · "
              f"<b>measurements:</b> {s['meas']} ({s['rate']:.2f} Hz avg) · "
@@ -1193,7 +1242,7 @@ def build_summary_tab(notes_html=""):
                 SEGS.append((f"F{fl} Lap {k[1]}", f"{ps(r0)}–{ps(r1)}",
                              "lap window", tracks_in(fl, RUNS[k])))
     else:
-        for fl in (1, 2):
+        for fl in sorted(FLIGHTS):                     # legacy 8/26 mission: flights 1, 2
             f0, f1 = FLIGHTS[fl]
             apex = {1: ("08:38:54", "08:46:01"), 2: ("09:01:46", "09:09:20")}[fl]
             SEGS.append((f"F{fl} takeoff", f"{ps(f0)}", "truth departs pad (E~1850, N~250)", "—"))
@@ -1210,7 +1259,7 @@ def build_summary_tab(notes_html=""):
                        f"<td style='text-align:left'>{d}</td></tr>" for a, b, c, d in SEGS)
 
     drops = []
-    for fl in (1, 2):
+    for fl in sorted(FLIGHTS):
         for tid in FLIGHT_TRACKS[fl]:
             r = S1["tracks"].get(str(tid))
             if r and r.get("drop") and r["meas"] > 10:
@@ -1238,16 +1287,19 @@ def build_summary_tab(notes_html=""):
         # prep_from_dump days: header from the mission structure, not the 8/26 text
         fl_txt = " ".join(f"Flight {fl}: {ps(a)}–{ps(b)} ({(b - a) / 60:.1f} min)."
                           for fl, (a, b) in sorted(FLIGHTS.items()))
+        _pl = lambda n, w: f"{n} {w}{'s' if n != 1 else ''}"
         intro = (f"<h2>Mission rollup — {DAY[0]:04d}-{DAY[1]:02d}-{DAY[2]:02d}</h2>"
-                 f"<p>{len(FLIGHTS)} flights, {len(RUNS)} lap windows. {fl_txt}</p>")
+                 f"<p>{_pl(len(FLIGHTS), 'flight')}, {_pl(len(RUNS), 'lap window')}. {fl_txt}</p>")
     else:
-        intro = """<h2>Mission rollup — 2026-08-26, MRU91 run Turquoise_Emu, drone mav14550_1_1</h2>
+        # legacy 8/26 mission text, byte-for-byte as served (leading newline included)
+        intro = """
+<h2>Mission rollup — 2026-08-26, MRU91 run Turquoise_Emu, drone mav14550_1_1</h2>
 <p>Two flights, each flying two out-and-back racetrack loops to ~3.9 km (min range ~0.9 km).
 Flight 1: 08:35:24–08:52:21 (17.0 min). Flight 2: 08:58:56–09:18:44 (19.8 min).
 Landing phases (last ~3–5 min of each flight) are excluded from lap metrics.</p>"""
     head = intro + f"""
 <div class='cap'>Mission structure at a glance (for anyone picking up the data)</div>
-<table class="tl"><tr><th>segment</th><th>window (PDT)</th><th>profile</th>
+<table class="tl"><tr><th>segment</th><th>window ({TZ_ABBR})</th><th>profile</th>
 <th>tracks with measurements in window</th></tr>{seg_rows}</table>
 <p><b>All errors in this report are RAW radar output — no bias removal anywhere.</b>
 The measured azimuth bias of <b>{BIAS:+.2f}°</b> (consistent at track and raw-observation
@@ -1255,7 +1307,7 @@ level) is INCLUDED in every error figure and statistic. Truth is converted from 
 feed to the radar's WGS-84 ENU frame by rigorous geodesy (lat/lon → ENU; altitude feet-MSL →
 metres, ellipsoidal); no altitude offset is applied. The resulting track-vs-truth vertical
 error is <b>{DU_residual:+.0f} m</b> median (the radar reads ~{abs(DU_residual):.0f} m high).</p>
-<table class="tl"><tr><th>Lap</th><th>window (PDT)</th><th>horiz err med/p95 (m)</th>
+<table class="tl"><tr><th>Lap</th><th>window ({TZ_ABBR})</th><th>horiz err med/p95 (m)</th>
 <th>3D ENU med/p95 (m)</th><th>measurements</th><th>meas rate (Hz)</th><th>tracked coverage
 (meas ≤2 s old)</th><th>longest mid-lap gap (s @ time)</th></tr>{srows}</table>
 <div class='cap'>Seeker-view geometry used on the lap tabs</div>
@@ -1424,17 +1476,31 @@ def prep_from_dump(dump_dir, out_mdir, target_pattern, flights, ant_hae_m,
     import glob as _g, os as _os, json as _json
     import pandas as _pd
     _os.makedirs(out_mdir, exist_ok=True)
-    tf = max(_g.glob(f"{dump_dir}/mavlink/{target_pattern}"), key=_os.path.getsize)
-    df = _pd.read_csv(tf)
+    cands = _g.glob(f"{dump_dir}/mavlink/{target_pattern}")
+    if not cands:
+        have = ", ".join(sorted(_os.path.basename(p) for p in _g.glob(f"{dump_dir}/mavlink/*.csv")))
+        raise FileNotFoundError(f"prep_from_dump: no mavlink csv matches {target_pattern!r} in "
+                                f"{dump_dir}/mavlink/ (present: {have or 'none'})")
+    tf = max(cands, key=_os.path.getsize)
+    if len(cands) > 1:
+        print(f"  [prep] {len(cands)} truth files match {target_pattern!r}; using the largest: "
+              f"{_os.path.basename(tf)}")
+    df = _pd.read_csv(tf)                          # columns by NAME (both dump layouts)
     if "validposition" in df: df = df[df["validposition"] != 0]
     df = df.sort_values("t_epoch").drop_duplicates("t_epoch")
+    n = len(df)
+    col = lambda name: (df[name].to_numpy(float) if name in df.columns else np.zeros(n))
+    vel_n, vel_e = col("vel_n_mps"), col("vel_e_mps")
     truth = np.column_stack([
-        df["t_epoch"], df["E_m"], df["N_m"],
-        df["alt_ft_wire"] - ant_hae_m,               # init_mission inverts this
+        df["t_epoch"].to_numpy(float), df["E_m"].to_numpy(float), df["N_m"].to_numpy(float),
+        df["alt_ft_wire"].to_numpy(float) - ant_hae_m,   # init_mission: (U + ant_hae) ft -> m HAE
         # quickdump layout has no speed_mps: derive it (the moving gate needs it)
-        (df["speed_mps"] if "speed_mps" in df.columns
-         else np.hypot(df["vel_n_mps"], df["vel_e_mps"])),
-        df["vel_n_mps"], df["vel_e_mps"], df["vert_spd_wire_ftmin"]])
+        (df["speed_mps"].to_numpy(float) if "speed_mps" in df.columns
+         else np.hypot(vel_n, vel_e)),
+        vel_n, vel_e, col("vert_spd_wire_ftmin"),
+        # geodetic position (deg) so init_mission can rebuild E/N/U with the EXACT
+        # WGS-84 corr_lib.EnuFrame instead of the legacy equirectangular inverse
+        df["lat"].to_numpy(float), df["lon"].to_numpy(float)])
     np.savez_compressed(f"{out_mdir}/truthv.npz", truth=truth)
 
     cols = ["t_epoch", "E_m", "N_m", "U_m", "vE_mps", "vN_mps", "vU_mps",
@@ -1445,7 +1511,7 @@ def prep_from_dump(dump_dir, out_mdir, target_pattern, flights, ant_hae_m,
         arrs = {"obs": np.zeros((0, 6))}
         for fp in _g.glob(f"{dump_dir}/tracks/track_*.csv"):
             if _os.path.getsize(fp) < 1200: continue
-            td = _pd.read_csv(fp, usecols=cols)
+            td = _pd.read_csv(fp, usecols=cols)       # extra columns of newer dumps ignored
             td = td[(td["t_epoch"] >= t0) & (td["t_epoch"] <= t1)]
             if len(td) < 8: continue
             tid = _os.path.basename(fp)[6:-4]

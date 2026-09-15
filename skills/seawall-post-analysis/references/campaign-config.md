@@ -1,15 +1,23 @@
 # Campaign JSON — complete schema for `postprocess_report.py`
 
-Reference for the config consumed by
-`/home/omar.syed/Test_Environment/track_correlation/postprocess_report.py`
-(an identical copy lives in `../scripts/postprocess_report.py`). Derived by reading the
-code and the real campaign file `track_correlation/seawall_week_0824.json` (the one that
-produced the Seawall Week of 8-24 report). Every key below is quoted with the exact
-code site that reads it. "Campaign-specific" means the analyst must set it per campaign;
-"constant" means the value is a pipeline convention that should be copied verbatim.
+Reference for the config consumed by `../scripts/postprocess_report.py` (the skill copy is
+the maintained one since 2026-09-15; `track_correlation/postprocess_report.py` is the older
+original). Derived by reading the code and the real campaign file
+`../templates/seawall_week_0824.json` (the one that produced the Seawall Week of 8-24 report,
+which the current code still reproduces byte-for-byte modulo plotly's random div ids).
+Every key below is quoted with the code site that reads it. "Campaign-specific" means the
+analyst must set it per campaign; "constant" means the value is a pipeline convention that
+should be copied verbatim.
 
-Invocation: `python postprocess_report.py <campaign.json>` — the script has NO argparse,
-no `--help`, no `--day`/`--only` flags; `sys.argv[1]` is opened with `json.load`.
+**2026-09-15 generalisation** — the pipeline runs for ANY MRU / site / timezone / drone ids:
+campaign-level `tz`, `target_pattern`, `interceptor_pattern`, `dump_root`; live-mongo day
+inputs via `dump_run_window.py`; 1..N flights on tracking days; exact WGS-84 truth frame on
+prep days; ffmpeg-less builds keep the engagement tab (only the FOV block is replaced);
+missing antenna is warned about loudly. Every default reproduces the 8/24 report.
+
+Invocation: `cd ../scripts && micromamba run -n sensorenv python postprocess_report.py <campaign.json>`
+— the script has NO argparse, no `--help`, no `--day`/`--only` flags; `sys.argv[1]` is opened
+with `json.load`.
 Unknown keys anywhere are ignored (every read is `day.get(...)` / `cfg.get(...)`), so
 `"_comment"` keys are safe at every level EXCEPT inside fixed-length list rows
 (`flights_pdt` triples, `steal_examples` 5-tuples, `init.day`, `init.ant`).
@@ -27,6 +35,11 @@ Unknown keys anywhere are ignored (every read is `day.get(...)` / `cfg.get(...)`
 | `days` | list | yes | — | `main()` iterates; one `<out_root>/<id>/report.html` per entry | yes |
 | `radar_rollup` | object | no | absent → no Radar Rollup tab / no `Radar_Rollup*.html` | `main()` → `build_radar_rollup(cfg["radar_rollup"], root)` | yes |
 | `server_base` | URL str | no | `None` | `write_standalone_rollup()`: rewrites `href="YYYY-MM-DD/report.html"` → `<server_base>/YYYY-MM-DD/report.html` in the `*_standalone.html` exports | yes (`http://172.18.1.28:8899/<report dir name>`) |
+| `tz` | IANA name | no | `"America/Los_Angeles"` | `configure()` → `ET.set_tz` / `TT.set_tz`: EVERY clock string (`flights_pdt`, `laps_pdt`, `window_pdt`, `cpa_seed_pdt`, `t_steal_pdt`, `t_pdt`) is parsed in this zone and every printed time / "time (PDT)" label uses its abbreviation at that instant (`PDT`/`PST`/`CEST`…). DST-aware (zoneinfo). Also passed to `dump_run_window.py --tz` for `mongo` inputs | yes for a non-Pacific site; August Pacific dates are unchanged (PDT = UTC−7) |
+| `target_pattern` | glob | no | `None` → legacy `mav14550_1_1.csv` (radar rollup: biggest `mav14550*.csv`) | `_pat("target", …)`: tracking `prep`, engagement `target.pattern`, steal/corruption views, `turn_zoom`, `radar_rollup.days[]` (`toxic_zones.pick_truth_csvs` — LARGEST match). Per-day / per-engagement / per-rollup-day `target_pattern` override | yes — `ls <dump>/mavlink/` |
+| `interceptor_pattern` | glob | no | `None` → legacy `mav14551_2_*.csv` (rollup: `mav14551*.csv`) | same scopes as `target_pattern`; several compids are merged | yes |
+| `dump_root` | abs path | no | `<out_root>/dumps` | root for `mongo` day inputs (`dump_run_window.py --root`) | when using `mongo` |
+| `geoid_n` | float m | no | dumper default −31.4 | passed as `--geoid-n` to the dumper for `mongo` inputs (tracking days ALSO need `init.geoid_n`) | new site |
 
 Outputs written by `main()` (all under `out_root`): `<day.id>/report.html` + `<day.id>/figs/`,
 `Rollup.html`, `index.html` (meta-refresh → Rollup.html), `Rollup_standalone.html`
@@ -46,9 +59,9 @@ rollup's own GIF/PNGs.
 | `sub` | str | no | `""` | `ET.write_page(...)` day page sub-line | e.g. `"run <run8> · post-cal"` |
 | `key_message_html` | HTML | no | `""` | Rollup card, "Key message" column | narrative |
 | `numbers_html` | HTML | no | `""` | Rollup card, "Numbers" column | narrative |
-| `dump` | abs path | cond. | — | `ensure_dump(day)` (engagement: per-engagement `dump` wins; tracking: `prep.dump` or `day.dump`) | archive dir: `<…>/<date>/<run8>[_label]/` containing `mavlink/`, `tracks/`, `meta.json` |
-| `mongo` | `{host, run, t0_pdt, t1_pdt}` | cond. | — | `ensure_dump()` shells out to `quickdump.py <t0_pdt> <t1_pdt> <dump_out>` | **BROKEN for anything but the 8/28 defaults** — see §8 item "mongo day input". Always pre-dump with quickdump and use `dump`. |
-| `dump_out` | str | no | `f"{mongo.run}_quickdump"` | `ensure_dump()` | only with `mongo`; same caveat |
+| `dump` | abs path | one of `dump`/`mongo` | — | `ensure_dump(obj, day)` (engagement: per-engagement `dump`/`mongo` wins, else the day's; tracking: `prep.dump`/`prep.mongo`, `day.dump`/`day.mongo`) | dump dir: `<…>/<date>/<run8>_<label>/` with `mavlink/`, `tracks/`, `meta.json` — `dump_run_window.py`, old `quickdump.py` and archiver layouts are all readable (columns are addressed by NAME; extra columns such as `time_local`/`speed_mps`/`truth_match_source`, and the `adsb/`, `obs/`, `jobs/` folders are ignored) |
+| `mongo` | object | one of | — | `ensure_dump()` → `run_dumper()` builds the exact `scripts/dump_run_window.py` command line, streams its progress as `[dump] …`, parses the printed `DUMP <dir>` / `exists: <dir>` line and writes the directory back into `obj["dump"]` (cached on the spec, so several engagements sharing a day-level `mongo` dump once) | keys: `mru` (→ `10.1NN.28.205`) **or** `host`; `run` (hex prefix \| `run_<hex>` \| friendly name \| `latest`); `jobs: "A-B"` **or** `t0`/`t1` (`"YYYY-MM-DD HH:MM[:SS]"`, or a bare `"HH:MM"` / quickdump-style `"HHMM"` which is placed on the day's `date`/`id`); `label` (folder `<run8>_<label>`, default `HHMM-HHMM`); optional `root` (else campaign `dump_root`), `tz`, `geoid_n`, `antenna [lat,lon,hae]`, `no_adsb`, `no_obs`, `overwrite`, `port`, `db`, `chunk_s`, `max_track_range_m`. An existing complete dump is reused unless `overwrite`. Also valid on `radar_rollup.days[]` (single spec or list), `steal_views[]`, `corruption_views[]`, `turn_zoom` |
+| `target_pattern` / `interceptor_pattern` | glob | no | campaign value | per-day override of the campaign globs (§1) | |
 
 ---
 
@@ -62,28 +75,29 @@ mission dir (`mdir`) or `prep` (synthesize the mission dir from a dump).
 | `mdir` | abs path | one of `mdir`/`prep` | — | `tracking_day_tabs()`: `TT.init_mission(mdir, spec=None, …)` | **`spec=None` selects the LEGACY 8/26 mission structure** (`tracking_tab.init_mission`, lines 137-155: hard-coded FLIGHTS/RUNS/INBOUND/track-id lists for MRU91 run 9b22a989). Only valid for `VP_TrackAnalysis/mru91_track2895/mission_20260826`. A new campaign MUST use `prep`. |
 | `prep` | object | one of | — | `tracking_day_tabs()` → `TT.prep_from_dump(dump, out_mdir, target_pattern, flights, ant_hae_m)` then `init_mission(..., spec={"gate_m": …})` (GENERIC structure) | |
 | `prep.dump` | abs path | yes (or `day.dump`) | — | `prep_from_dump()` reads `<dump>/mavlink/<target_pattern>` (largest match) and `<dump>/tracks/track_*.csv` | |
-| `prep.target_pattern` | glob | yes | — | `prep_from_dump()`: `max(glob(f"{dump}/mavlink/{pattern}"), key=size)` | e.g. `"mav14550_1_1.csv"`; the exact `target_id` naming differs per day (8/25 was `mav14551_2_2.csv`) — `ls <dump>/mavlink/` first |
-| `prep.ant_hae_m` | float (m HAE) | yes | — | `prep_from_dump()`: truthv U column = `alt_ft_wire - ant_hae_m` (feet minus metres, deliberately: `init_mission` inverts it with `(U + ANT_HAE)*0.3048 + GEOID_N`) | MUST equal `init.ant[2]`. Read from the dump's `meta.json` (`antenna[2]` or `antenna_origin_lat_lon_haeM[2]`). |
-| `prep.flights_pdt` | list of `[date, hms, hms]` | yes | — | `tracking_day_tabs()`: `ET.epoch_pdt(d, a), ET.epoch_pdt(d, b)` (fixed UTC−7) | **Exactly TWO entries.** `init_mission` loads only `fast2_F1.npz` and `fast2_F2.npz` (line 123) and `build_summary_tab` iterates `for fl in (1, 2)` (line 1212) — one flight → `KeyError: 2`; three → F3 silently has no tracks. |
-| `prep.out_mdir` | abs path | no | `<day_dir>/mission_inputs` | `prep_from_dump()` writes `truthv.npz`, `fast2_F1.npz`, `fast2_F2.npz`, `analysis_stage1.json` (rewritten every run — no cache) | |
+| `prep.target_pattern` | glob | no (campaign `target_pattern`, else legacy `mav14550_1_1.csv`) | — | `prep_from_dump()`: `max(glob(f"{dump}/mavlink/{pattern}"), key=size)`; a no-match raises listing the ids present | e.g. `"mav14550_1_1.csv"`; the exact `target_id` naming differs per day (8/25 was `mav14551_2_2.csv`) — `ls <dump>/mavlink/` first |
+| `prep.ant_hae_m` | float (m HAE) | no | `init.ant[2]` (with a console note) | `prep_from_dump()`: truthv U column = `alt_ft_wire - ant_hae_m` (feet minus metres, deliberately: `init_mission` inverts it with `(U + ANT_HAE)*0.3048 + GEOID_N`) | a value > 0.5 m away from `init.ant[2]` prints a WARN. Read from the dump's `meta.json` (`antenna[2]` or `antenna_origin_lat_lon_haeM[2]`). |
+| `prep.flights_pdt` | list of `[date, hms, hms]` | yes | — | `tracking_day_tabs()`: `ET.epoch_pdt(d, a), ET.epoch_pdt(d, b)` in the campaign `tz` | **1..N entries** (one `fast2_F<n>.npz` each; `init_mission` globs `fast2_F*.npz`, the Summary iterates `sorted(FLIGHTS)`). Since 2026-09-15 — before, exactly two were required. |
+| `prep.laps_pdt` | `{"<flight>,<lap>": [date, hms, hms]}` | no | one lap per flight | `spec["runs"]` → `Flight N · Lap N` tabs | list every key in `flight_keys` as `F<flight>R<lap>` |
+| `prep.out_mdir` | abs path | no | `<day_dir>/mission_inputs` | `prep_from_dump()` writes `truthv.npz` (10 cols: …, lat, lon), `fast2_F<n>.npz`, `analysis_stage1.json` (rewritten every run — no cache) | truth E/N/U are rebuilt by `init_mission` with the EXACT `corr_lib.EnuFrame` from the stored lat/lon (the legacy 8-col layout keeps the equirectangular inverse for the served 8/26 mdir) |
 | `prep.gate_m` | float | no | `350.0` | `spec["gate_m"]` → `init_mission`: tracks whose median distance to truth < gate are FLIGHT_TRACKS (top 10 by samples); PLOT_TRACKS = those with med < 200 m and ≥ 20 samples (max 6) | constant unless truth is very biased (8/25 pre-cal) |
-| `init` | object | no (but effectively required) | `{}` | `tracking_day_tabs()` passes `day`, `ant`, `geoid_n` through to `TT.init_mission` | omit `ant` → `DEFAULT_ANT` = MRU91 8/26 antenna (33.7480633, −115.3392025, 139.88) |
+| `init` | object | no (but effectively required) | `{}` | `tracking_day_tabs()` passes `day`, `ant`, `geoid_n` (+ the campaign `tz`) through to `TT.init_mission` | omit `ant` on a `prep` day → the dump's `meta.json` antenna is used with a `[WARN]`; no meta antenna either (or an `mdir` day) → `DEFAULT_ANT` = MRU91 8/26 antenna (33.7480633, −115.3392025, 139.88) with a loud `[WARN]` |
 | `init.day` | `[Y, M, D]` | no | `(2026, 8, 26)` | `TT.DAY` — only used by `hhmm()` in the legacy branch; harmless for GENERIC but set it anyway | |
 | `init.ant` | `[lat, lon, hae_m]` | yes in practice | MRU91 | `TT.ANT_LAT/LON/HAE` — truth E/N/U reconstruction and AGL clamp | per-deployment (from `meta.json`) |
 | `init.geoid_n` | float m | no | `-31.4` (`DEFAULT_GEOID_N`, Seawall site) | `TT.GEOID_N`: truth alt ft-MSL → m-HAE | **site constant** — a new site needs its own HAE−MSL undulation |
 | `notes_html` | HTML | no | `""` | `TT.build_summary_tab(notes_html=…)` | **`""` falls back to the ORIGINAL 8/26 "Key findings" narrative (hard-coded text about tracks 94/917, −1.45°, …)**. Always author non-empty text. |
-| `flight_keys` | list of `"F<n>R<m>"` | no | `[]` | `tracking_day_tabs()`: label `Flight n · Lap m`; `TT.build_flight_tab(k)` → `RUNS[(n, m)]` | With `prep` (no `spec.runs`), RUNS = `{(i,1)}` → valid keys are **`F1R1` and `F2R1` only**; `F1R2` raises `KeyError` → pane replaced by "flight pane …: not available (…)" (build continues). |
+| `flight_keys` | list of `"F<n>R<m>"` | no | `[]` | `tracking_day_tabs()`: label `Flight n · Lap m`; `TT.build_flight_tab(k)` → `RUNS[(n, m)]` | With `prep` and no `laps_pdt`, RUNS = `{(i,1)}` → valid keys are **`F<n>R1`**; an unknown key raises `KeyError` → pane replaced by "flight pane …: not available (…)" (build continues). |
 
 What `init_mission` prints (success): `global az bias +X.XX deg; RAW vertical residual (track-truth) ±NN m (NOT removed; DU=0)` and
 `pad truth-U NNN m; altitude clamp >20 m AGL: truth A -> B pts`. The empty-match guard prints
 `init_mission: NO matched tracks this mission — bias/datum set to 0` (wrong `target_pattern`, wrong `ant`, or no target-side tracks).
 
-Hard-coded text inside the tracking Summary tab you cannot override from config
-(`tracking_tab.build_summary_tab`, lines 1236-1262): the `<h2>` reads
-**"Mission rollup — 2026-08-26, MRU91 run Turquoise_Emu, drone mav14550_1_1"**, followed by
-"Two flights, each flying two out-and-back racetrack loops to ~3.9 km … Flight 1: 08:35:24–08:52:21 … Flight 2: 08:58:56–09:18:44",
-regardless of day. `build_flight_tab` also prints "outbound to ~3.9 km and back" in every window line. A new
-campaign must edit these strings (or accept the wrong header).
+Generated text on `prep` (GENERIC) days is computed from the data: the Summary `<h2>` is
+"Mission rollup — <date>" + "<N> flight(s), <M> lap window(s). Flight n: hh:mm:ss–hh:mm:ss (x min)…",
+every lap tab's window line says "truth range a–b km" (min/max truth ground range in the window),
+and an empty `notes_html` renders a "not yet written" placeholder. The 8/26 literals
+("MRU91 run Turquoise_Emu", "outbound to ~3.9 km and back", the 8/26 key findings) survive ONLY
+on the legacy `mdir` path (`spec=None`), which is kept byte-identical for the served 8/26 report.
 
 ---
 
@@ -101,9 +115,10 @@ heading error → track-metrics error window → state-at-CPA table → `post_ht
 | `overview_html` | HTML | no | absent → no Overview tab | `engagement_day_tabs()` prepends `("Overview", html)` | narrative |
 | `engagements` | list | yes | — | one tab each, `enumerate(start=1)` → `i` | |
 | `engagements[].name` | str | yes | — | `<h3>` heading, GIF title, console tag `[name] tc=…` | e.g. `"9/16 Flight 2 — pass 3 (10:12:05 PDT)"` |
-| `engagements[].dump` | abs path | yes (else `ensure_dump(day)`) | — | `load_dump_truth` / `load_dump_track13` | may differ per engagement (8/28 used three quickdumps) |
-| `engagements[].interceptor_pattern` | glob | no | `"mav14551_2_*.csv"` | `ET.load_dump_truth(dump, pattern, t0, t1)` merged across matches, `drop_frozen` applied | MAVLink alias naming: `mav<port>_<sysid>_<compid>`; the interceptor publishes several compids (2_0, 2_1, 2_34) → keep the wildcard |
-| `engagements[].target` | `{"pattern": glob}` **or** `{"traj_csv": path}` | yes | — | `pattern` → `load_dump_truth(dump, pattern, t0, t1)`; `traj_csv` → `load_traj_csv_truth(csv, ant)` (columns `utc_s, lat, lon, alt_hae_m` — onboard-GPS export, used 8/27 eng 2 when the MAVLink truth froze) | |
+| `engagements[].dump` / `.mongo` | abs path / spec | one of (else the day's `dump`/`mongo`) | — | `ensure_dump(eng, day)` → `load_dump_truth` / `load_dump_track13` | may differ per engagement (8/28 used three quickdumps) |
+| `engagements[].interceptor_pattern` | glob | no | day → campaign `interceptor_pattern` → legacy `"mav14551_2_*.csv"` | `ET.load_dump_truth(dump, pattern, t0, t1)` merged across matches, `drop_frozen` applied | MAVLink alias naming: `mav<port>_<sysid>_<compid>`; the interceptor publishes several compids (2_0, 2_1, 2_34) → keep the wildcard |
+| `engagements[].target` | `{"pattern": glob}` **or** `{"traj_csv": path}` | `pattern` optional (falls back to the day/campaign `target_pattern`) | — | `pattern` → `load_dump_truth(dump, pattern, t0, t1)`; `traj_csv` → `load_traj_csv_truth(csv, ant)` (columns `utc_s, lat, lon, alt_hae_m` — onboard-GPS export, used 8/27 eng 2 when the MAVLink truth froze); optional `label` for the legend | |
+| `engagements[].interceptor_label` / `.target_label` | str | no | derived from the truth files actually loaded (`ET.id_label`: compids of one port → the port number `14551`; anything else → the id, e.g. `mavlink_1_2`) | legend names "interceptor <id> (truth)" / "target <id> — TRUTH / radar TRACK n" | |
 | `engagements[].window_pdt` | `[hms, hms]` | yes | — | `t0, t1` for loading truth (padded ±60 s inside `load_dump_truth`) and the Overview figure span | the whole flight/engagement, not just the pass |
 | `engagements[].cpa_seed_pdt` | `hms` | yes | — | `cfg["cpa_seed"]`; `build_engagement_tab` refines the true CPA with `E.cpa` within ±20 s of the seed; track CPA searched ±20 s then ±120 s (late-born track) | from the manifest's `passes[].t_pdt` |
 | `engagements[].track_id` | int | yes | — | `load_dump_track13(dump, tid)` → `<dump>/tracks/track_<tid>.csv` (13 cols) | `FileNotFoundError` if not in the dump window |
@@ -112,7 +127,7 @@ heading error → track-metrics error window → state-at-CPA table → `post_ht
 | `engagements[].post_html` | HTML | no | `""` | appended after the tab (also after the failure stub) | narrative |
 | `engagements[].tab_label` | str | no | `f"Engagement {i}"` | tab button text | |
 | `engagements[].pre`, `.post` | float s | no | 18.0 / 5.0 | copied into `cfg` but **NOT read** by `build_engagement_tab` — the CPA plot window is the BINDING standard `t−10 … t+5` (line 219) | ignore / omit |
-| `engagements[].fov` | object | no | absent → no FOV player | `build_fov_section(fov, outdir, tc, target, ant, trkV, name)`; returns `""` with a console `[fov] …skipped` note when ulog/video missing | |
+| `engagements[].fov` | object | no | absent → no FOV player | `build_fov_section(fov, outdir, tc, target, ant, trkV, name)` inside a try/except in `build_engagement_tab`: missing ulog → `""` with a console `[fov] …skipped` note; **missing ffmpeg (and no cached mp4) or any render error → the block is replaced by an "Seeker FOV section unavailable …" note and the tab still builds.** ffmpeg is resolved by `ET.ffmpeg_bin()`: `$SEAWALL_FFMPEG` (a non-executable value DISABLES it — handy to test the skip path), `PATH`, the interpreter's `bin/` (sensorenv), the legacy absolute path | |
 | `fov.ulog` | path or glob | yes | — | `_ulog_series()`: `glob`, largest file wins; pyulog topics `vehicle_status, vehicle_gps_position, vehicle_local_position, vehicle_attitude` | interceptor (Zeus) PX4 log |
 | `fov.zoff` | float s | yes | — | added to the ulog UTC anchor — the per-log flight-controller clock offset (8/27: 36002.0 = FC 10 h 00 m 02 s behind UTC; 8/28: 36001.3–36001.8) | **campaign-specific, measured by position xcorr vs truth** |
 | `fov.video` | path | yes | — | IR mkv, decoded strictly sequentially (`cv2`; broken indexes, never seek) | |
@@ -121,13 +136,13 @@ heading error → track-metrics error window → state-at-CPA table → `post_ht
 | `fov.target_label` | str | no | `"target truth"` | legend text | |
 
 Constants baked into the engagement tab (not configurable): `MIN_PTS = 4` interceptor samples;
-CPA window −10/+5 s; error-window ±12 s; overview pass gate `< 75 m`, both craft ≥ 3 m/s, closing ≥ 8 m/s, ≥ 20 s apart;
-FOV cone 12° full / 500 m, 5 Hz grid; PX4 `nav_state == 14` = OFFBOARD; legend names
-"interceptor 14551 (truth)" / "target 14550 — TRUTH/TRACK" (`build_engagement_tab` lines 240-243).
+CPA window −10/+5 s; error-window ±12 s (`err_pre`/`err_post` per engagement); overview pass gate `< 75 m`, both craft ≥ 3 m/s, closing ≥ 8 m/s, ≥ 20 s apart;
+FOV cone 12° full / 500 m, 5 Hz grid; PX4 `nav_state == 14` = OFFBOARD. Legend ids are derived (see `interceptor_label`).
 
 Console on success per engagement: `[<name>] tc=<epoch> inter=N targ=N trk<id>=N cpa_truth=NNm cpa_trk=NNm`.
-Failures are caught in `engagement_day_tabs()` and print `  <name> skipped: <error>`; the tab is replaced by
-"not buildable from archived data (<error>)" and the build continues.
+Failures (including missing dump / track csv / bad pattern) are caught in `engagement_day_tabs()` and print
+`  <name> skipped: <error>`; the tab is replaced by "not buildable from archived data (<error>)" and the build
+continues. A whole day failing (e.g. the dumper) is stubbed by `main()` as an "Error" tab and the campaign goes on.
 
 ---
 
@@ -148,7 +163,9 @@ the example pointers come from config.
 | `days[].label` | str | yes | — | table/bar labels; must be unique | `"9/16"` |
 | `days[].scoreable` | bool | no | `true` | `false` → row shows `note`, no computation | 8/25 (0 target-side tracks) |
 | `days[].note` | str | no | `"not scoreable"` | with `scoreable:false` | |
-| `days[].dirs` | list of abs paths | yes if scoreable | — | `_rr_day_samples(dirs)`: `TZ.pick_truth_csvs(d)` (target = biggest `mavlink/mav14550*.csv`), `TZ.load_target_tracks` (median < 150 m); `meta.json` of `dirs[0]` read for the run label (`run_id8` or `run`, `friendly_name`) and the satellite tile antenna (`antenna_origin_lat_lon_haeM` / `antenna_origin` / `antenna`) | several dumps of one day are merged |
+| `days[].dirs` | list of abs paths | one of `dirs`/`mongo` if scoreable | — | `_rr_day_samples(dirs, target_pattern, interceptor_pattern)`: `TZ.pick_truth_csvs(d, …)` (target = LARGEST match of the pattern; default biggest `mavlink/mav14550*.csv`), `TZ.load_target_tracks` (median < 150 m); `meta.json` of `dirs[0]` read for the run label (`run_id8` or `run`, `friendly_name`) and the satellite tile antenna (`antenna_origin_lat_lon_haeM` / `antenna_origin` / `antenna`) | several dumps of one day are merged; a day that fails to load is shown as "not computable" and skipped |
+| `days[].mongo` | spec or list of specs | one of | — | each spec dumped with `dump_run_window.py` (§2 `mongo`), results become `dirs` | |
+| `days[].target_pattern` / `.interceptor_pattern` | glob | no | `radar_rollup.*_pattern` → campaign → toxic_zones defaults | truth loaders | |
 | `days[].az_bias_cfg` | float deg | no | — | used only when the day is not scoreable / bias not computable; plotted with a `*` | analyst-provided |
 | `cell_m` | float m | no | `50.0` | heat-map cell size; each cell scored over its 5×5 neighbourhood | 8/24 used `30.0` |
 | `min_dwell` | int | no | `2` | min truth samples for a cell to exist; worst-cell table needs `dwell ≥ 8*min_dwell` | |
@@ -163,15 +180,17 @@ the example pointers come from config.
 | `steal_views[].cap` | HTML | no | `""` | caption | narrative |
 | `steal_views[].gif` | rel path | no | `f"figs/steal_{tid}.gif"` | **cache key**: if the file exists it is reused (`[steal] reusing … (delete to re-render)`) | |
 | `steal_views[].banner` / `.rel_label` | str | no | `"TRACK STEAL"` / `"steal"` | flashing banner text; clock suffix | |
-| `steal_views[].interceptor_pattern` / `.target_pattern` | glob | no | `"mav14551_2_*.csv"` / `"mav14550_1_1.csv"` | truth loaders | |
+| `steal_views[].interceptor_pattern` / `.target_pattern` | glob | no | campaign patterns → legacy `"mav14551_2_*.csv"` / `"mav14550_1_1.csv"` | truth loaders; `dump` may be replaced by a `mongo` spec; a missing `ant` falls back to the dump's `meta.json` antenna for the tiles | |
 | `corruption_views` | list | no | `[]` | same schema/loader as `steal_views` (set `banner`/`rel_label` to `"CPA"`) **plus** `ET.E.err_window_fig(trkV, target, t, ±12 s)` az/el/range/alt error panels | |
-| `az_bias_example` | object | no | absent → no example map | `TT.init_mission(ex["mdir"], spec=None, **init)` then `TT.maps_fig(flight, RUNS[(flight, run)], color_of(flight))` — RAW vs bias-rotated maps | **`spec=None` → legacy 8/26 structure again**: only works with `mission_20260826`. For a new campaign, either point `mdir` at a `prep`-generated `mission_inputs` dir AND accept that `RUNS` is the legacy 8/26 table (it will KeyError / mis-window) — i.e. omit this block, or change the code to pass a spec. |
-| `az_bias_example.mdir`, `.init{day,ant,geoid_n}`, `.flight` (default 1), `.run` (default 2), `.caption_html` | | | | | |
+| `az_bias_example` | object | no | absent → no example map | `TT.init_mission(ex["mdir"], spec=…, **init)` then `TT.maps_fig(flight, RUNS[(flight, run)], color_of(flight))` — RAW vs bias-rotated maps | default `spec=None` = the legacy 8/26 mission table (only `mission_20260826`). For a `prep`-generated `mission_inputs` dir set `"generic": true` (+ optional `"laps_pdt"` and `"gate_m"`) so the GENERIC structure is used; `flight`/`run` must then exist in that structure |
+| `az_bias_example.mdir`, `.init{day,ant,geoid_n}`, `.flight` (default 1), `.run` (default 2), `.generic`, `.laps_pdt`, `.gate_m`, `.caption_html` | | | | | |
 | `turn_zoom` | object | no | absent → no figure | `_rr_turn_zoom_fig(tz, root)` writes `figs/turn_zoom.png` (rewritten every run) | |
 | `turn_zoom.dump`, `.date`, `.t_pdt`, `.tracks` (list: `[dying_track, successor]` — the FIRST id is checked for death within +3 s), `.win_s` (45), `.label`, `.cap`, `.target_pattern` | | | | | |
 
 Console per scoreable day: `  [radar] <label> (<run8> (<friendly>)): az bias +X.XX° · active NN.N% · coast turns NN.N% vs straight NN.N% (N.Nx)`.
-Satellite fetch failure prints `  [radar] satellite tiles unavailable — plain background` (offline / Esri blocked) and continues.
+Satellite fetch failure prints `  [radar] satellite tiles unavailable — plain background` (offline / Esri blocked) and continues;
+the heat-map section then carries a "Satellite imagery unavailable at build time" caption. Time labels in the tab use the zone
+abbreviation of the first truth sample (`PDT`/`PST`/…).
 
 ---
 
@@ -199,11 +218,17 @@ Computed at build time (never write these numbers into the config except as narr
 
 Grep basis: `omar.syed|MRU91|hours=-7|Los_Angeles|2026-08|707ccda9|9b22a989|214a1a56|e65bd4f9|33.748|115.339|arcgisonline|plotly.min.js|8899|10.191|GEOID|-31.4|-29.4|mav14550|mav14551|ffmpeg` over the pipeline modules.
 
-### Timezone — three different "PDT"s (WILL break Nov–Mar or outside Pacific)
-- `engagement_tab.PDT = timezone(timedelta(hours=-7))` (line 1008) → `ET.epoch_pdt()` is used by `postprocess_report` for **every** clock string in the config, tracking `flights_pdt` included. Also `state_table` (line 61), `build_overview_section` (131, 203), `_rr_steal_gif` (321), `_rr_turn_zoom_fig` (465), `build_radar_rollup` (524).
-- `quickdump.PDT = timezone(timedelta(hours=-7), "PDT")` and `ih.data.PDT` likewise → dump windows and `time_pdt` columns.
-- `tracking_tab.PDT = ZoneInfo("America/Los_Angeles")` (DST-aware) → tick labels / `ps()` on tracking pages; `corr_lib.LOCAL_TZ` likewise.
-- Consequence: during PST (after the first Sunday of November) the fixed −7 h converters are 1 h off UTC while the tracking-page labels are right → windows land one hour early relative to labels. For a unit in another region every "PDT" label is wrong. No config knob; edit the constants.
+### Timezone — FIXED 2026-09-15 (one campaign `tz`, DST-aware)
+- `engagement_tab.TZ` (zoneinfo, `set_tz(name)`, `PDT` kept as an alias) drives `ET.epoch_pdt()` (tz-aware, accepts `HH:MM[:SS[.f]]`),
+  `hms_local()`, `tz_abbr(t)` and every clock label in the engagement tab, the overview PNG axis, the IR frame strip and the
+  radar rollup (`postprocess_report` uses `ET.TZ`/`ET.hms_local`/`ET.tz_abbr` everywhere; the two fixed `timedelta(hours=-7)` in
+  `_rr_steal_gif` / `_rr_turn_zoom_fig` are gone).
+- `tracking_tab.TZ` (`set_tz`, `init_mission(tz=…)`) with `TZ_ABBR` refreshed from the first flight window → every "time (PDT)"
+  axis title / table header becomes "time (<abbr>)".
+- `quicklook_report.py --tz` (default: the dump's `meta.json` `tz`, else LA) writes `"tz"` into the generated config;
+  `dump_run_window.py --tz` names the day folder and the `time_local` column.
+- Verified: every 8/25–8/28 clock string resolves to the same epoch as the old fixed −7 h converter (August = PDT); a
+  December date differs by exactly 3600 s (PST) as it should.
 
 ### Site / antenna / geoid
 - `corr_lib.GEOID_N = -31.4` (HAE−MSL, Seawall SoCal) → `mavlink_alt_hae_m()` used by `ih.archive.save_archive` when writing `U_m_hae` and by `seawall_archiver`. A new site with a different undulation gets a wrong truth altitude in every dump.
@@ -219,13 +244,20 @@ Grep basis: `omar.syed|MRU91|hours=-7|Los_Angeles|2026-08|707ccda9|9b22a989|214a
 - `tracking_tab.init_mission` legacy branch: run 9b22a989 track ids and 08:35–09:18 windows; `DEFAULT_TITLE/SUB` "MRU91 Mission Report 2026-08-26"; Summary `<h2>` "Mission rollup — 2026-08-26, MRU91 run Turquoise_Emu, drone mav14550_1_1" (unconditional); default `notes_html` = the 8/26 findings.
 - `toxic_zones.DAYS` / `OUTDIR` (8/25, 8/28 MRU91 dirs under `VP_TrackAnalysis/mru91_track2895/toxic_zones_0828`) — only for its own CLI, not used by the pipeline.
 
-### Target naming
-- Default globs `mav14551_2_*.csv` (interceptor) and `mav14550_1_1.csv` (target) in `postprocess_report` (lines 91, 297-299, 420-422, 463, 644); `toxic_zones.pick_truth_csvs` hard-codes `mav14550*.csv` / `mav14551*.csv` (used by the radar rollup — a campaign whose target is not on MAVLink port 14550 gets `ValueError: max() arg is an empty sequence`).
-- Engagement legend names "interceptor 14551" / "target 14550".
+### Target naming — FIXED 2026-09-15
+- Campaign `target_pattern` / `interceptor_pattern` (+ per-day / per-engagement / per-rollup-day overrides) reach every loader:
+  `postprocess_report._pat()`, `toxic_zones.pick_truth_csvs(day_dir, target_pattern, interceptor_pattern)` (LARGEST match),
+  steal/corruption views, `turn_zoom`. Without them the legacy globs apply (`mav14550_1_1.csv` / `mav14551_2_*.csv`; rollup
+  `mav14550*.csv` / `mav14551*.csv`), so the 8/24 config reproduces.
+- Legend ids come from the truth files actually loaded (`ET.truth_ids` + `ET.id_label`): `mav14551_2_0/2_1/2_34` → "14551",
+  `mavlink_1_2` → "mavlink_1_2". `toxic_zones` page text no longer mentions MRU91 / mav14550 (`--site`, `--target`, `--interceptor`
+  for its own CLI; the antenna hover reads "radar antenna (ENU origin)").
 
 ### Filesystem / tools
-- `tracking_tab.py` line 38: `sys.path.insert(0, "/home/omar.syed/Test_Environment/track_correlation")` (absolute).
-- `engagement_tab._fov_render`: ffmpeg fallback `/home/omar.syed/.local/share/mamba/envs/sensorenv/bin/ffmpeg` (after `shutil.which`).
+- `tracking_tab.py` / `engagement_tab.py` import siblings by their own directory (no absolute `track_correlation` path any more).
+- ffmpeg: `engagement_tab.ffmpeg_bin()` = `$SEAWALL_FFMPEG` → `PATH` → `<interpreter dir>/ffmpeg` (sensorenv) → the legacy absolute path.
+  Checked BEFORE any render; none found → the FOV block alone is replaced by an "unavailable" note (tab builds). A cached
+  `figs/fov_<video>.mp4` never needs ffmpeg.
 - `quickdump.py` sys.path: `<TE>/Seawall_Ironhide_Testing/ironhide_dashboard`, `<TE>/ironhide_dashboard`, `<TE>/chaos-spa/src` — today `ih` resolves to `/home/omar.syed/Test_Environment/ironhide_dashboard/ih/` (a sibling copy of `ironhide_dashboard_served/ih/`; `archive.py` and `data.py` are byte-identical in both).
 - `toxic_zones.PLOTLY_JS = track_correlation/plotly.min.js` (own CLI only). The pipeline pages inline plotly via `pyo.get_plotlyjs()` (`engagement_tab.wrap_tabs`) — ~4.6 MB per page, no external file needed. (`tracking_tab.wrap_page` references `plotly.min.js` relatively but is NOT used by the pipeline.)
 - Satellite imagery: `live_correlator._satmap_payload` → `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}`, needs outbound HTTPS; falls back to a plain dark background.
@@ -239,19 +271,21 @@ Grep basis: `omar.syed|MRU91|hours=-7|Los_Angeles|2026-08|707ccda9|9b22a989|214a
 
 ---
 
-## 8. Things that would BREAK (or silently mislead) on a new MRU / site / timezone
+## 8. Things that would BREAK (or silently mislead) on a new MRU / site / timezone — status 2026-09-15
 
-1. **`mdir` without `prep`** and **`radar_rollup.az_bias_example`** both call `init_mission(..., spec=None)` = the legacy 8/26 mission table. Only `mission_20260826` satisfies it. New campaigns: use `prep`; omit `az_bias_example` (or patch the code to pass a spec).
-2. **Tracking day needs exactly two flight windows** and keys `F1R1`/`F2R1` (see §3).
-3. **`notes_html: ""` prints the 8/26 findings**; the Summary `<h2>` is hard-coded 8/26 text either way.
-4. **Fixed −7 h converters** vs DST-aware labels (see §7).
-5. **`GEOID_N = -31.4`** baked into the dump writer (`corr_lib`) — another site's truth altitude is off by the undulation difference (tens of metres possible).
-6. **`mongo` day input** dumps the wrong unit/run/day and returns a path that does not exist (quickdump writes under `<ARCHIVE_ROOT>/<day>/<name>/`, `ensure_dump` returns the bare `name`). Pre-dump instead.
-7. **Truth N scale in `prep` tracking days**: `prep_from_dump` copies the dump's exact-ENU `E_m/N_m`, but `init_mission` inverts them with an equirectangular 111 320 m/deg (designed for the original extraction's equirect E/N) before `pymap3d.geodetic2enu` → truth N compressed ≈ 0.36 % (≈ 14 m north at 4 km), i.e. a small artificial range-scale bias in tracking-day errors. Not present on engagement days (they use the dump ENU directly).
-8. **`speed_mps` missing in quickdump/`save_archive` mavlink CSVs** (columns are `…,U_m_hae,vel_n_mps,vel_e_mps,…`; the old `seawall_archiver` layout had `speed_mps`). `toxic_zones.TruthInterp` falls back to `hypot(vel_n, vel_e)` (rollup OK). `prep_from_dump` fills zeros → `init_mission` treats every pre-flight sample as parked (PAD_U still OK) but the "moving truth" gate `m[:, 15] > 4` in `seeker_quad`/`perp_fig` drops every sample → **seeker panels empty / pAcq missing** for tracking days built from quickdumps. Use an archiver-layout dump or add a `speed_mps` column before `prep`.
-9. **`meta.json` key variants**: archiver dumps carry `run` (`run_<hex>`), `run_id8`, `friendly_name`, `antenna_origin_lat_lon_haeM`, `geoid_n_m`; quickdump / `save_archive` dumps carry `run` (8-hex), `antenna`, `label`, `window`, `mavlink_ids`, `layouts`. `_rr_satmap` accepts `antenna_origin_lat_lon_haeM | antenna_origin | antenna`; the run label falls back to `meta["run"]`. `toxic_zones.satmap` (own CLI only) accepts only the archiver key.
-10. **Both block-143 layouts**: `save_archive` decodes 2026.3.x NED `x_state`/`p_cov` AND 2026.9.x `x_state_ecef`/`p_cov_ecef` + LLA (`ih.feed.track_rows`), so the CSV layout is identical either way; `seawall_archiver.pull_tracks` handles NED only (returns nothing on a 2026.9.x unit).
-11. **Target not on port 14550 / interceptor not on 14551**: set every `*_pattern` explicitly AND accept that `radar_rollup` (via `toxic_zones.pick_truth_csvs`) cannot be pointed elsewhere without a code change.
-12. **`server_base` link rewrite only for `YYYY-MM-DD` day ids**.
-13. **ffmpeg missing** → `_fov_render` raises → the whole engagement tab becomes the "not buildable" stub (not just the FOV block). Run under `micromamba run -n sensorenv` (ffmpeg is in the env's `bin/`).
-14. **Esri tiles blocked** → maps on plain background (cosmetic).
+1. **`mdir` without `prep`** = the legacy 8/26 mission table (only `mission_20260826`). Unchanged by design (served 8/26 report). New campaigns: use `prep`. `radar_rollup.az_bias_example` now takes `"generic": true` for a prep-generated dir.
+2. ~~Tracking day needs exactly two flight windows~~ **FIXED** — 1..N `flights_pdt` rows, `F<n>R<lap>` keys.
+3. ~~`notes_html: ""` prints the 8/26 findings; Summary `<h2>` hard-coded~~ **FIXED** on prep days (placeholder + computed header / "truth range a–b km" lines). Legacy `mdir` path unchanged.
+4. ~~Fixed −7 h converters~~ **FIXED** — campaign `tz` (§7).
+5. **`GEOID_N`** is a site constant in three places: the dumper (`dump_run_window.py --geoid-n`, campaign `geoid_n` for `mongo` inputs), `init.geoid_n` on tracking days, and `corr_lib.GEOID_N` (−31.4) for the OLD quickdump/archiver writers. Set all of them for a new site; the pipeline cannot detect a mismatch.
+6. ~~`mongo` day input broken~~ **FIXED** — `dump_run_window.py` with the full spec (§2), dir parsed from the dumper output, valid on days / prep / engagements / rollup days / views.
+7. ~~Truth N compressed 0.36 % on prep days~~ **FIXED** — `prep_from_dump` stores lat/lon, `init_mission` rebuilds E/N/U with `corr_lib.EnuFrame`. Effect on 8/25: global az bias −2.17° → −2.12°, lap medians change by ≤ 3 m.
+8. `speed_mps` missing in old quickdump CSVs — `prep_from_dump` derives `hypot(vel_n, vel_e)`; `dump_run_window.py` writes the column. Fine either way.
+9. `meta.json` key variants — every reader accepts `antenna_origin_lat_lon_haeM | antenna_origin | antenna` (incl. `toxic_zones.satmap`).
+10. Both block-143 layouts — handled by `dump_run_window.py` / `ih.archive`; the CSV layout is identical.
+11. ~~Target not on port 14550 / interceptor not on 14551~~ **FIXED** — campaign patterns reach the rollup too. Verified with `mavlink_1_2*` (MRU43) and `mav*_1_*` (synthetic site).
+12. `server_base` link rewrite only for `YYYY-MM-DD` day ids (two days on one date need distinct ids, e.g. `2026-10-01-eng` — its standalone link then stays relative).
+13. ~~ffmpeg missing → whole tab stubbed~~ **FIXED** — only the FOV block is replaced; run under sensorenv for the real player.
+14. Esri tiles blocked → plain background + a caption in the heat-map section (cosmetic).
+15. Antenna omitted → meta.json antenna with `[WARN]`; nothing available → MRU91 default with a loud `[WARN]` (never silent).
+16. Still hard-coded: `toxic_zones.DAYS/OUTDIR` (its own CLI defaults only), `engagement_tab._fov_render` display-only `GEOID_N = -29.4` (MSL axis label in the FOV video), `tracking_tab.DEFAULT_TITLE/SUB` (its own CLI), the 8/26 legacy mission table.

@@ -1,10 +1,11 @@
 # Seawall post-process report — operating procedure
 
-The canonical pipeline is `track_correlation/postprocess_report.py` driving the two
-report modules (`tracking_tab.py`, `engagement_tab.py` + `eng_plots.py`) and the
-`toxic_zones.py` gates for the radar rollup. Copies of every script are in
-`../scripts/`, but the copies still `sys.path.insert` the absolute
-`/home/omar.syed/Test_Environment/track_correlation`, so run from there.
+The canonical pipeline is `../scripts/postprocess_report.py` driving the two report
+modules (`tracking_tab.py`, `engagement_tab.py` + `eng_plots.py`) and the `toxic_zones.py`
+gates for the radar rollup. The skill copies import each other by sibling path — run them
+from `../scripts/` (the older `track_correlation/` originals predate the 2026-09-15
+generalisation: campaign `tz`, truth patterns, `mongo` inputs via `dump_run_window.py`,
+1..N flights, exact truth frame, ffmpeg-less builds).
 
 Environment for everything: `micromamba run -n sensorenv python …`
 (python 3.13, plotly 6.8, pandas, numpy, matplotlib, PIL, cv2 4.11, pyulog, pymap3d,
@@ -13,100 +14,84 @@ Alternatively `PY=/home/omar.syed/.local/share/mamba/envs/sensorenv/bin/python`.
 
 Paths used below:
 
-    TC=/home/omar.syed/Test_Environment/track_correlation
+    TC=/home/omar.syed/Test_Environment/Ironhide-Support-Scripts/skills/seawall-post-analysis/scripts   # the pipeline
     WEEK=/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_<M-DD>   # archive root for the campaign
     SERVED=/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895              # http.server :8899 root
 
 ---
 
-## 1. Dump a run window to the archive layout
+## 1. Dump a run window to the archive layout — `dump_run_window.py`
 
-### 1a. `quickdump.py` (thin CLI over `ih.archive.save_archive`) — the canonical dump
-
-Confirmed: `quickdump.main()` only parses args, resolves the host, converts `HHMM` → epoch
-with a fixed UTC−7, and calls `AR.save_archive(host, port, db, run, t0, t1, label=…, root=…, out_name=name, register=…, mru=…)`.
-`save_archive` is the same function the Ironhide dashboard's "Save to archive" card uses, so the
-CLI and the dashboard write byte-identical layouts. Today `ih` resolves to
-`/home/omar.syed/Test_Environment/ironhide_dashboard/ih/` (identical to `ironhide_dashboard_served/ih/`).
-
-Exact help (`micromamba run -n sensorenv python quickdump.py --help`):
+`../scripts/dump_run_window.py` is the canonical dumper (self-contained: pymongo + numpy, no
+streamlit / `ih` import). It replaces `track_correlation/quickdump.py`; old quickdump and
+`seawall_archiver` dumps stay readable by every pipeline module (columns are addressed by
+name, `time_pdt` and `time_local` are both ignored, extra columns and the `adsb/` folder too).
 
 ```
-usage: quickdump.py [-h] [--day DAY] [--host HOST] [--mru MRU] [--port PORT] [--db DB] [--run RUN] [--root ROOT] [--label LABEL]
-                    [--register]
-                    t0 t1 name
-
-positional arguments:
-  t0             window start HHMM (PDT)
-  t1             window end HHMM (PDT)
-  name           output folder name under <root>/<day>/ (e.g. e65bd4f9_flight1_quickdump)
-
-options:
-  --day DAY      PDT calendar day of the window (default today)
-  --host HOST    mongo host (default 10.191.28.205, or from --mru)
-  --mru MRU      MRU number -> host 10.1NN.28.205 (used when --host is not given)
-  --port PORT
-  --db DB
-  --run RUN      run collection (run_<hex>)
-  --root ROOT    archive root (default: ih.data.ARCHIVE_ROOT = current test week Seawall_Ironhide_Testing/Seawall_Week_of_9-14, or $IH_ARCHIVE_ROOT)
-  --label LABEL  flight label for meta.json / flights.json (default: the folder name)
-  --register     append the window to <day>/flights.json as a replayable flight
+usage: dump_run_window.py [--mru MRU | --host HOST] [--port PORT] [--db DB] --run RUN
+                          (--t0 T0 --t1 T1 | --jobs A-B) [--label LABEL] [--root ROOT]
+                          [--tz TZ] [--geoid-n GEOID_N] [--antenna lat,lon,hae] [--no-obs] [--no-adsb]
+                          [--max-track-range-m M] [--chunk-s S] [--overwrite]
+                          | --list-runs [--list-limit N] | --selftest
+  --run      hex prefix | run_<hex> | friendly name | latest
+  --t0/--t1  local time in --tz: '2026-09-03 15:25[:ss]', '15:25' (= today) or an epoch
+  --jobs     job range A-B -> window from the block-136 job events (indexed)
+  --label    dump folder suffix: <run8>_<label> (default HHMM-HHMM)
+  --root     archive root (default ./archive)          --tz (default America/Los_Angeles)
+  --geoid-n  HAE - MSL at the site, m (default -31.4)  --antenna fallback origin when the run publishes none
 ```
-
-Command (one dump per flight window, or one per day if the day is short):
 
 ```bash
 cd $TC
-micromamba run -n sensorenv python quickdump.py 0930 1015 <RUN8>_flight1_quickdump \
-    --mru <NN> --run run_<full hex> --day 2026-09-16 --root $WEEK --register
+micromamba run -n sensorenv python dump_run_window.py --mru 43 --list-runs
+micromamba run -n sensorenv python dump_run_window.py --mru 43 --run 6aecec5e --jobs 21627-23147 --label ep1 --root $WEEK
+micromamba run -n sensorenv python dump_run_window.py --mru 43 --run Lavender_Bison \
+    --t0 "2026-09-03 15:25" --t1 "2026-09-03 15:39" --label flight1 --root $WEEK --tz America/Los_Angeles --no-adsb
 ```
 
-- `--run` is REQUIRED in practice (default is the 8/28 MRU91 run). List runs on a unit with
-  `micromamba run -n sensorenv python post_correlate.py --host 10.1NN.28.205 --list-runs` or
-  `aoa_bias_correct.py --mru NN --list-runs`.
-- `--day` defaults to today; the window is `HHMM..HHMM` PDT (fixed −7 h) on that day.
-- The first line of stderr `WARNING streamlit.runtime.caching…: No runtime found, using MemoryCacheStorageManager` is harmless (ih imports streamlit).
-- Progress is a single stderr line `NN.N %  <block> · HH:MM:SS of HH:MM:SS`; success prints
-  `QUICKDUMP <name>: N mavlink rows (<ids>), N tracks / N rows (NED n · ECEF n), N obs rows -> <dir> · flights.json flight N`.
-- Wall time: one query per 120 s slice × three block types; a 45-min window on an ADS-B-heavy unit is a few minutes.
-  Every query is windowed on the INDEXED `time_spec.full_sec` (never `time_spec_float`).
+- Progress goes to stderr (`run … on host`, `jobs A-B: … -> window …`, `antenna origin …`, one line per
+  `--chunk-s` slice), success ends with `DUMP <dir>` + a counts line; an existing complete dump prints
+  `exists: <dir> (complete dump; --overwrite to replace)` and exits 0. Every query filters the INDEXED
+  `time_spec.full_sec` (never `time_spec_float`). MRU43 12-min window: ~25 s.
+- Antenna origin: block-143 payload `antenna_location_origin_*`, else the obs sensor-node centroid, else `--antenna`.
 
-What lands where (`ih.archive` docstring, verified against `e65bd4f9_flight1_quickdump/`):
+What lands where:
 
 ```
-<root>/<YYYY-MM-DD>/<name>/
-    mavlink/<target_id>.csv   t_epoch,time_pdt,lat,lon,alt_ft_wire,E_m,N_m,U_m_hae,vel_n_mps,vel_e_mps,vert_spd_wire_ftmin,validposition
-    tracks/track_<tid>.csv    t_epoch,time_pdt,E_m,N_m,U_m,vE_mps,vN_mps,vU_mps,sigE_m,sigN_m,sigU_m,total_associations,track_state,last_update_t,
-                              truth_match_id,truth_match_conf,contributors,sigvE_mps,sigvN_mps,sigvU_mps
-    obs/obs.csv               t_epoch,time_pdt,az_rad,el_rad,rng_m,rr_mps,bi_rng_m,bi_rng_rate_mps,truth_target_id,truth_match_type
-    meta.json                 run (8-hex), run_collection, label, what, window, window_pdt, antenna [lat,lon,hae], tx_lla, frame, mru, host,
-                              port, db, saved_at(_pdt), roles{target,interceptor}, mavlink_rows, track_rows, tracks, obs_rows, layouts{ned,ecef},
-                              n_adsb_docs, mavlink_ids, columns
-+ <root>/<YYYY-MM-DD>/flights.json  (only with --register: a "saved window" entry, passes not computed)
+<root>/<YYYY-MM-DD local>/<run8>_<label>/
+    mavlink/<target_id>.csv   t_epoch,time_local,lat,lon,alt_ft_wire,E_m,N_m,U_m_hae,speed_mps,vel_n_mps,vel_e_mps,vert_spd_wire_ftmin,validposition,source
+    adsb/<target_id>.csv      same columns, non-MAVLINK sources (ignored by every report reader)
+    tracks/track_<tid>.csv    t_epoch,time_local,E_m,N_m,U_m,vE_mps,vN_mps,vU_mps,sigE_m,sigN_m,sigU_m,total_associations,track_state,last_update_t,
+                              truth_match_id,truth_match_conf,truth_match_source,contributors,sigvE_mps,sigvN_mps,sigvU_mps,track_type
+    obs/obs.csv, jobs/jobs.csv
+    meta.json                 run, run_id8, friendly_name, version, mru, host, label, day, jobs_range, window_epoch/local, tz,
+                              antenna_origin_lat_lon_haeM (+ antenna duplicate), tx_lla, geoid_n_m, 143_layout, counts, columns, tool_version
 ```
 
-- Truth E/N/U: `corr_lib.EnuFrame` about the run's antenna origin (read from any block-143 payload), altitude
-  feet-MSL → m WGS-84 HAE via `corr_lib.mavlink_alt_hae_m` (GEOID_N −31.4, site constant).
-- **Both block-143 layouts** are decoded by `ih.feed.track_rows`: 2026.3.x (`x_state` NED + `p_cov`) and 2026.9.x
-  (`x_state_ecef` + `p_cov_ecef` + `latitude_rad/longitude_rad/altitude_m`). The CSV layout is the same either way;
-  `meta.json.layouts` tells you which was seen. Tracks farther than 15 km from the antenna are dropped.
-- NOTE the mavlink CSV has NO `speed_mps` column (the old `seawall_archiver.py` layout did). Consequences in §5.
+- Truth E/N/U: exact WGS-84 ENU about the run's antenna origin; altitude feet-MSL → m HAE via `ft*0.3048 + geoid_n`.
+  Both block-143 layouts (2026.3.x NED `x_state`, 2026.9.x `x_state_ecef`) are decoded to the same CSV columns.
 - `validposition == 0` rows are kept in the file; every reader drops them.
 
-### 1b. `seawall_archiver.py` — legacy whole-run dumper (not canonical)
+### 1b. Let the pipeline dump for you — `mongo` day inputs
 
-`SEAWALL_OUT_ROOT=$WEEK PYTHONPATH=$TC micromamba run -n sensorenv python seawall_archiver.py` dumps EVERY run with
-MAVLink activity since `RANGE_T0 = 2026-08-25` from `HOST = 10.191.28.205` into `<root>/<day>/<run8>/`
-(mavlink/ + tracks/ + meta.json with `run_id8`, `friendly_name`, `antenna_origin_lat_lon_haeM`; the mavlink CSV
-HAS `speed_mps`). It queries the unindexed `time_spec_float` (slow on live units), decodes only the NED layout,
-retries forever, and has MRU91 constants baked in. Use it only if you need the archiver-layout dump (e.g. for the
-seeker panels, §5 item on `speed_mps`), and edit `HOST`/`RANGE_T0`/`FALLBACK_ANT` first. Its output dirs are what
-the 8/26 and 8/27 days of the 8/24 campaign used (`9b22a989/`, `214a1a56/`).
+Any day / tracking `prep` / engagement / radar-rollup day / steal view may carry a `mongo` spec instead of
+`dump`; `postprocess_report.ensure_dump()` builds the exact command above, streams the dumper's lines as
+`[dump] …`, parses `DUMP <dir>` and writes the directory back into `dump`:
 
-### 1c. Dashboard "Save to archive"
+```json
+"mongo": {"mru": 43, "run": "6aecec5e", "jobs": "21627-23147", "label": "ep1"}
+"mongo": {"host": "10.143.28.205", "run": "Lavender_Bison", "t0": "2026-09-03 15:25", "t1": "15:39", "label": "flight1", "no_adsb": true}
+```
 
-Same `save_archive`, run as a background job from the Ironhide dashboard; writes to `ih.data.ARCHIVE_ROOT`
-(default `Seawall_Week_of_9-14`, env `IH_ARCHIVE_ROOT`) and registers the window in `flights.json`.
+Bare `HH:MM` times are placed on the day's `date`/`id`; `root` defaults to the campaign `dump_root`
+(else `<out_root>/dumps`); the campaign `tz` and `geoid_n` are passed through. `quicklook_report.py --mongo
+"mru=43,run=6aecec5e,jobs=21627-23147,label=ep1"` does the same for a one-command quick look (see quicklook.md).
+
+### 1c. Legacy dumpers (still readable, not canonical)
+
+`quickdump.py` (ih.archive, fixed UTC−7 `HHMM` window, no `speed_mps` column) and `seawall_archiver.py`
+(whole-run, unindexed `time_spec_float`, NED layout only, MRU91 constants) produced the 8/24 dumps
+(`9b22a989/`, `214a1a56/`, `e65bd4f9_*_quickdump/`). Their layouts remain first-class inputs.
 
 ---
 
@@ -150,15 +135,18 @@ Start from `../templates/campaign_template.json` (fully commented; every narrati
 Full key reference: `campaign-config.md`. Checklist before running:
 
 1. `out_root` = `$SERVED/<campaign>_report`, `server_base` = `http://172.18.1.28:8899/<campaign>_report`.
-2. Every day `id` is `YYYY-MM-DD`.
-3. Tracking day: `prep` (never bare `mdir`), exactly two `flights_pdt`, `flight_keys` = `["F1R1","F2R1"]`,
-   `init.ant` + `prep.ant_hae_m` from `meta.json`, `notes_html` NON-EMPTY.
-4. Engagement day: `date`, `ant`, per-engagement `dump`, `target.pattern`, `interceptor_pattern`, `window_pdt`,
-   `cpa_seed_pdt`, `track_id`, `gif` under `figs/`, `summary_html` uses only `{cpa_truth}`, `{cpa_track}`, `{track_id}`.
-   `fov` only when the ulog + IR video + a measured `zoff` exist (else omit — the section is skipped cleanly).
-5. `radar_rollup.days[].dirs` — every scoreable dump dir; the target must be a `mav14550*.csv` (code limit).
-   Omit `az_bias_example` (legacy-only). `steal_views`/`corruption_views`/`turn_zoom` only for events you have ids and times for.
-6. `python -c "import json; json.load(open('<cfg>'))"` — JSON validity (no trailing commas).
+2. Top level: `tz` (IANA name of the site), `target_pattern` / `interceptor_pattern` from `ls <dump>/mavlink/`
+   (globs; the rollup takes the LARGEST match), `dump_root` when using `mongo` inputs.
+3. Every day `id` is `YYYY-MM-DD` (two days on one date: give the second a suffix, e.g. `2026-10-01-eng`).
+4. Tracking day: `prep` (never bare `mdir`), one `flights_pdt` row per flight (1..N), `flight_keys` = `F<n>R1`
+   (or `F<n>R<lap>` with `laps_pdt`), `init.ant` (+ `prep.ant_hae_m` = `init.ant[2]`) and `init.geoid_n` for the site,
+   `notes_html` NON-EMPTY.
+5. Engagement day: `date`, `ant`, per-engagement `dump` (or `mongo`), `window_pdt`, `cpa_seed_pdt`, `track_id`,
+   `gif` under `figs/`, `summary_html` uses only `{cpa_truth}`, `{cpa_track}`, `{track_id}`. Patterns default to the
+   top level. `fov` only when the ulog + IR video + a measured `zoff` exist (a missing ffmpeg replaces just that block).
+6. `radar_rollup.days[].dirs` (or `mongo`) — every scoreable dump dir. `az_bias_example` only with a legacy mdir or
+   `"generic": true`. `steal_views`/`corruption_views`/`turn_zoom` only for events you have ids and times for.
+7. `python -c "import json; json.load(open('<cfg>'))"` — JSON validity (no trailing commas).
 
 ---
 
@@ -172,8 +160,13 @@ micromamba run -n sensorenv python postprocess_report.py /path/to/<campaign>.jso
 There is no `--help`; `python postprocess_report.py --help` just raises
 `FileNotFoundError: [Errno 2] No such file or directory: '--help'` (it tries to `json.load` the argument).
 No `--day`, `--only`, dry-run or cache flags exist. Imports are `engagement_tab as ET`, `tracking_tab as TT`
-(+ lazy `toxic_zones`, `live_correlator`, matplotlib, PIL, cv2, pyulog) — all from `$TC`, so run from that directory
-(the script also resolves `quickdump.py` via `HERE`).
+(+ lazy `toxic_zones`, `live_correlator`, matplotlib, PIL, cv2, pyulog) — all siblings in `$TC`
+(the script resolves `dump_run_window.py` via `HERE`). The first log line echoes the campaign tz and the
+truth patterns in force (`(legacy default)` when the config sets none).
+
+To test the ffmpeg-less path (or keep a rebuild under 3 min when the FOV inputs exist): `SEAWALL_FFMPEG=/nonexistent`
+in the environment disables ffmpeg → every FOV block prints `[fov] ffmpeg not found … — FOV section skipped` and
+renders an "unavailable" note; the rest of the tab is untouched. Cached `figs/fov_<video>.mp4` files are still used.
 
 Background run (agent shells reset cwd between calls — put the `cd` inside the command, use absolute paths):
 
@@ -196,8 +189,10 @@ tail -f /abs/<campaign>_build.log
 | radar rollup: steal / corruption GIFs (101 frames + Esri tiles) | ~20–40 s each | 0 s — `[steal] reusing figs/steal_<tid>.gif (delete to re-render)` |
 | standalone exports (base64 inlining) | ~2 s | same |
 
-Whole 8/24 campaign with warm caches: **~65 s** (Sep 2 build: 11:46:28 → 11:47:31). First build with six FOV
-videos: ~10–12 min. Memory is modest (< 2 GB).
+Whole 8/24 campaign with warm caches: **~65 s** (Sep 2 build: 11:46:28 → 11:47:31); the 2026-09-15 regression
+build of the same config with the six `fov` blocks present but ffmpeg disabled: **74 s** (cold steal GIFs, Esri tiles
+fetched). First build with six FOV videos: ~10–12 min. Memory is modest (< 2 GB). A `mongo` day adds the dump time
+(MRU43 12-min window: ~25 s).
 
 ### Outputs
 
@@ -264,23 +259,25 @@ the run still exits 0. `grep -n "skipped\|Traceback\|unavailable" <log>` after e
 | message | cause | fix |
 |---|---|---|
 | `init_mission: NO matched tracks this mission — bias/datum set to 0` then `flight F1R1 skipped: …` / empty panes | `prep.target_pattern` matched the wrong feed, `init.ant`/`ant_hae_m` wrong (truth lands far from tracks), or genuinely no target-side tracks (8/25) | `ls <dump>/mavlink/`; compare `meta.json.antenna` with `init.ant`; check `analysis_stage1.json` `tracks[*].med` in `out_mdir` |
-| `KeyError: 2` from `build_summary_tab` / `FileNotFoundError: …/fast2_F2.npz` | tracking day with one `flights_pdt` entry | give exactly two windows (split a single flight at its midpoint if needed) |
-| `flight F1R2 skipped: KeyError: (1, 2)` | `flight_keys` with a lap number ≠ 1 on a `prep` day | use `F1R1`, `F2R1` |
-| Summary tab header says "Mission rollup — 2026-08-26, MRU91 run Turquoise_Emu" | hard-coded in `tracking_tab.build_summary_tab` | edit lines 1236-1240 of `tracking_tab.py` for the new campaign |
-| Summary tab shows 8/26 "Key findings" about tracks 94/917 | `notes_html` empty | author `notes_html` |
+| `flight F1R2 skipped: KeyError: (1, 2)` | `flight_keys` names a lap that is not in `laps_pdt` (a `prep` day without `laps_pdt` has one lap per flight) | use `F<n>R1`, or add the lap window to `prep.laps_pdt` |
+| Summary tab header says "Mission rollup — 2026-08-26, MRU91 run Turquoise_Emu" / 8/26 "Key findings" | the day uses `mdir` (legacy 8/26 path) | use `prep` — GENERIC days compute the header and show a placeholder until `notes_html` is authored |
+| `[WARN] … init.ant not set — tracking_tab.DEFAULT_ANT … (MRU91 8/26)` | no antenna in the config or dump meta | set `init.ant` / `ant` (per deployment) |
 | `<name> skipped: <name>: no valid CPA near seed (interceptor pts in seed window: N)` | `cpa_seed_pdt` off by more than ~20 s, interceptor pattern wrong, or the interceptor truth was frozen (all samples removed by `drop_frozen`) | re-read `passes[].t_pdt`; check `mavlink/mav14551_2_*.csv` has moving rows around the seed |
 | `<name> skipped: too few samples in CPA window (inter N, targ M) — check inputs` | truth gap at the pass (< 4 samples in t−10…t+5) | pick another pass or use `target.traj_csv` (onboard GPS) |
 | `FileNotFoundError: no truth rows for <pattern> in <dump>` (empty match guard in `load_dump_truth`) | pattern/dump mismatch or window outside the dump | fix `pattern`, `dump`, `window_pdt`, `date` |
 | `FileNotFoundError: <dump>/tracks/track_<id>.csv` | track id not in this dump's window | check the manifest's `target_track_spans` for that dump; use the right quickdump dir |
 | `KeyError: 'antenna_origin_lat_lon_haeM'` | only from `toxic_zones.py`'s own CLI on a quickdump (`meta.json` has `antenna` instead); the pipeline's `_rr_satmap` accepts `antenna` | not a pipeline error; for toxic_zones CLI add the key or use an archiver dump |
-| `ValueError: max() arg is an empty sequence` in `pick_truth_csvs` | radar_rollup day dir has no `mavlink/mav14550*.csv` | the target must be on port 14550 for the rollup, or edit `toxic_zones.pick_truth_csvs` |
+| `[radar] <label>: FAILED (no target truth csv matches 'mav14550*.csv' in …/mavlink (present: …))` | radar_rollup day whose target is not on MAVLink port 14550 | set the campaign (or rollup-day) `target_pattern` — the row shows "not computable" and the build continues |
+| `FileNotFoundError: prep_from_dump: no mavlink csv matches '…' (present: …)` | tracking `target_pattern` wrong for this dump | pick one of the listed ids |
 | Seeker quad empty / no "Inside 12° FOV" line on a `prep` tracking day | `speed_mps` missing in quickdump mavlink CSV → truth speed 0 → moving gate `m[:,15] > 4` drops everything | use an archiver-layout dump, or add a `speed_mps` = hypot(vel_n, vel_e) column to the truth CSV before `prep` |
 | `[radar] satmap attempt 1 error: …` ×2 then `satellite tiles unavailable — plain background` | no HTTPS to `server.arcgisonline.com` | cosmetic; re-run when online (steal GIFs are cached — delete them to re-render with imagery) |
 | `[fov] flight log not available (…) — FOV section skipped` / `IR video / camera model not available` | wrong glob/path, or `cam` lacks `fps`+`onset_frame`/`utc0` and no `camwarp` | fix paths; the tab still builds |
-| `<name> skipped: ffmpeg transcode failed rc=…` or `FileNotFoundError: …/sensorenv/bin/ffmpeg` | ffmpeg not on PATH and fallback path missing | run under `micromamba run -n sensorenv`; `which ffmpeg` |
+| `[fov] ffmpeg not found (PATH, interpreter bin/, SEAWALL_FFMPEG) and no cached mp4 — FOV section skipped` | ffmpeg unavailable (or `SEAWALL_FFMPEG` points nowhere) | the tab still builds with an "unavailable" note; run under `micromamba run -n sensorenv` (ffmpeg in its `bin/`) and rebuild for the player |
+| `[fov] <name>: FOV section failed (…) — section skipped, tab continues` | any error inside the FOV render (broken video index, pyulog schema) | fix the inputs; the rest of the tab is unaffected |
 | `ModuleNotFoundError: cv2 / pyulog` | wrong interpreter | sensorenv only |
 | plotly `ValueError: … kaleido … Chrome` | not raised by this pipeline (no `fig.to_image`/`write_image`; all PNG/GIF/mp4 are matplotlib/PIL/cv2). Only appears if someone adds plotly rasterization | keep figures as `pyo.plot(... output_type="div")`; if rasterizing is needed install kaleido + Chrome |
-| `[mongo] quickdump: …` then `FileNotFoundError` on `<run>_quickdump/mavlink` | `mongo` day input: `ensure_dump` passes no `--host/--run/--day/--root` and returns a relative name | dump beforehand with quickdump (§1) and set `dump` |
+| `DAY <id> FAILED: RuntimeError('dump_run_window.py failed rc=…')` | `mongo` spec wrong (unit unreachable, run not found, empty window) | check the `[dump] …` lines above it (the dumper's own error); the day is stubbed and the other days build |
+| `KeyError: '<tag>: neither 'dump' nor 'mongo' given'` | a day / engagement / rollup day without an input | add `dump` or `mongo` |
 | Build stops mid-way with no traceback when run in the background | the launching shell was killed — typically `pkill -f postprocess_report` matched the `bash -c '… postprocess_report.py …'` wrapper (self-kill) or the agent's own shell | kill by pid; if you must pattern-match use `pkill -f "python postprocess_report.py"` from a shell whose command line does not contain that string |
 | Streamlit `No runtime found, using MemoryCacheStorageManager` | `ih` import in quickdump | harmless |
 | Engagement summary shows `nan m to radar track` | track CPA not found within ±120 s | late-born/early-dead track; say so in `summary_html` or choose the track alive at the pass |
@@ -297,6 +294,8 @@ Caching actually implemented (everything else is recomputed on every run):
 - NOT cached: `prep_from_dump` mission inputs, 3-D GIFs (~10 s each), overview PNGs, `turn_zoom.png`, all plotly divs, rollup stats.
 
 Because a warm rebuild is ~1 min, the normal loop for narrative edits is simply **edit JSON → full run → reload**.
+`mongo` inputs are effectively cached too: the dumper leaves an existing complete dump alone (`exists: <dir>`), so a
+rebuild costs no mongo time unless the spec carries `"overwrite": true`.
 
 **Add a day**: dump it (§1), manifest it (§2), append a `days[]` entry (and a `radar_rollup.days[]` entry with its
 `dirs`), re-run. Existing day folders under `out_root` are overwritten in place; nothing is deleted, so stale
@@ -308,6 +307,7 @@ Because a warm rebuild is ~1 min, the normal loop for narrative edits is simply 
 cd $TC && micromamba run -n sensorenv python - <<'EOF'
 import json, os, postprocess_report as P, engagement_tab as ET
 cfg = json.load(open("/abs/<campaign>.json"))
+P.configure(cfg)                       # campaign tz + truth patterns (main() does this)
 root = cfg["out_root"]
 day = next(d for d in cfg["days"] if d["id"] == "2026-09-17")
 day_dir = os.path.join(root, day["id"]); os.makedirs(day_dir + "/figs", exist_ok=True)
@@ -326,6 +326,7 @@ were rewritten without the day pages):
 cd $TC && micromamba run -n sensorenv python - <<'EOF'
 import json, postprocess_report as P
 cfg = json.load(open("/abs/<campaign>.json"))
+P.configure(cfg)
 html = P.build_radar_rollup(cfg["radar_rollup"], cfg["out_root"])
 P.write_radar_only(cfg["out_root"], cfg, html)
 EOF

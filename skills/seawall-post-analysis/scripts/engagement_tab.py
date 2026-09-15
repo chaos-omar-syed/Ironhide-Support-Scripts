@@ -27,6 +27,14 @@ cfg keys
   pre_sections    [(h4_heading, html), ...] inserted after the summary (high-level
                   flight overview / CPA timing go here)
   extra_sections  [(h4_heading, html), ...] appended after the canonical sections
+  interceptor_label / target_label   legend ids ("14551" / "14550" defaults; the
+                  pipeline passes the ids of the truth files actually loaded)
+  fov           optional FOV-player block; any failure inside it (no ffmpeg, no
+                  ulog/video) replaces ONLY that section with an 'unavailable' note
+
+Timezone: every clock string / label uses the module TZ (zoneinfo, DST-aware;
+set_tz("<IANA name>"), default America/Los_Angeles). epoch_pdt() is the tz-aware
+parser (name kept for compatibility); tz_abbr(t) gives 'PDT'/'PST'/... for labels.
 """
 import os, sys, math
 import numpy as np
@@ -57,10 +65,8 @@ def state_table(trkV, t_cpa, truth=None, label="", when="CPA"):
     hspd = math.hypot(r[4], r[5]); hdg = (math.degrees(math.atan2(r[4], r[5])) + 360) % 360
     hsig = math.hypot(r[7], r[8]); dts = np.diff(np.unique(trkV[:, 0]))
     rate = (1.0 / np.median(dts)) if len(dts) else float("nan")
-    import datetime
-    PDT = datetime.timezone(datetime.timedelta(hours=-7))
-    ps = lambda t: datetime.datetime.fromtimestamp(t, PDT).strftime("%H:%M:%S")
-    rows = [("time (PDT)", ps(r[0])), ("position E, N, Up (m)", "%.0f, %.0f, %.0f" % (r[1], r[2], r[3])),
+    ps = hms_local                                    # campaign tz (set_tz)
+    rows = [(f"time ({tz_abbr(r[0])})", ps(r[0])), ("position E, N, Up (m)", "%.0f, %.0f, %.0f" % (r[1], r[2], r[3])),
             ("horizontal speed (m/s)", "%.1f" % hspd), ("vertical speed (m/s)", "%+.1f" % r[6]),
             ("heading (° from N)", "%.0f" % hdg), ("position 1σ  horiz / vert (m)", "%.1f / %.1f" % (hsig, r[9])),
             ("associations", "%d" % int(r[10])), ("track_state code", "%d" % int(r[11])),
@@ -128,7 +134,7 @@ def build_overview_section(cfg, outdir, tc):
     S1, S2, S3, TERM = "#2a78d6", "#eb6834", "#1baf7a", "#e34948"
     SURF, INK, INK2, MUTED, GRIDC, BASE = ("#fcfcfb", "#0b0b0b", "#52514e",
                                            "#898781", "#98a0ac", "#7f8791")
-    PDTZ = _dtt.timezone(_dtt.timedelta(hours=-7))
+    PDTZ = TZ                                          # campaign tz (set_tz)
     pdt = lambda s: _dtt.datetime.fromtimestamp(s, PDTZ)
     rc = {"figure.facecolor": SURF, "axes.facecolor": SURF, "savefig.facecolor": SURF,
           "axes.edgecolor": BASE, "axes.labelcolor": INK2, "axes.grid": True,
@@ -199,8 +205,7 @@ def build_overview_section(cfg, outdir, tc):
         ax.set_title("Interceptor ↔ target distance — dots = pass CPAs")
 
         os.makedirs(os.path.join(outdir, "figs"), exist_ok=True)
-        import datetime
-        tag = f'{cfg["track_id"]}_{datetime.datetime.fromtimestamp(tc, datetime.timezone(datetime.timedelta(hours=-7))).strftime("%H%M%S")}'
+        tag = f'{cfg["track_id"]}_{_dtt.datetime.fromtimestamp(tc, TZ).strftime("%H%M%S")}'
         fn = f"figs/ovw_{tag}.png"
         fig.savefig(os.path.join(outdir, fn), dpi=130)
         plt.close(fig)
@@ -237,10 +242,14 @@ def build_engagement_tab(cfg, outdir):
         raise RuntimeError(f"{cfg['name']}: too few samples in CPA window "
                            f"(inter {n_i}, targ {n_t}) — check inputs")
 
-    objs = [dict(name="interceptor 14551 (truth)", color=E.INTER, arr=inter, leader=True),
-            dict(name="target 14550 — TRUTH", color=E.TRUTH,
+    # legend ids come from the truth files actually loaded (postprocess_report
+    # passes interceptor_label / target_label); defaults = the Seawall ports
+    ilab = cfg.get("interceptor_label") or "14551"
+    tlab = cfg.get("target_label") or "14550"
+    objs = [dict(name=f"interceptor {ilab} (truth)", color=E.INTER, arr=inter, leader=True),
+            dict(name=f"target {tlab} — TRUTH", color=E.TRUTH,
                  arr=E._win(E.declutter(targ), *W), leader=True),
-            dict(name=f"target 14550 — radar TRACK {tid}", color=E.TRACK,
+            dict(name=f"target {tlab} — radar TRACK {tid}", color=E.TRACK,
                  arr=E._win(trk, *W), leader=True)]
     gif = cfg.get("gif_name", "eng_3d.gif")
     E.gif3d(objs, c_tru, os.path.join(outdir, gif), f"{cfg['name']} — 3-D", tc,
@@ -275,9 +284,17 @@ def build_engagement_tab(cfg, outdir):
     # player (when flight-log + IR data exist) -> pre_sections -> 3-D -> 2-D
     # -> closing distance -> closing speed -> heading error -> state -> extras
     ovw = build_overview_section(cfg, outdir, tc)
-    fov_html = (build_fov_section(cfg["fov"], outdir, tc=tc, target=targ,
-                                  ant=cfg.get("ant"), trkV=cfg.get("trkV"),
-                                  name=cfg["name"]) if cfg.get("fov") else "")
+    fov_html = ""
+    if cfg.get("fov"):
+        # the FOV block is OPTIONAL: any failure inside it (missing ffmpeg, broken
+        # video index, pyulog schema, ...) skips ONLY this block, never the tab
+        try:
+            fov_html = build_fov_section(cfg["fov"], outdir, tc=tc, target=targ,
+                                         ant=cfg.get("ant"), trkV=cfg.get("trkV"),
+                                         name=cfg["name"])
+        except Exception as e:
+            print(f"  [fov] {cfg['name']}: FOV section failed ({e!r}) — section skipped, tab continues")
+            fov_html = fov_unavailable_html(f"render failed: {e}")
     html = f"<h3>{cfg['name']}</h3>" + summary + ovw + fov_html
     for heading, extra in cfg.get("pre_sections", []):
         html += f"<h4>{heading}</h4>" + extra
@@ -344,16 +361,40 @@ def _ir_extract(video, idxs, outdir, tag):
     for fi, r_, t_, a_ in idxs:
         p = f"figs/fov_{tag}_{fi}.jpg"
         if os.path.exists(os.path.join(outdir, p)):
-            ts = _dtt.datetime.fromtimestamp(t_, PDT).strftime("%H:%M:%S")
+            ts = _dtt.datetime.fromtimestamp(t_, TZ).strftime("%H:%M:%S")
             cells.append(
                 f'<span style="display:inline-block;margin:4px;text-align:center">'
-                f'<img src="{p}" width="400"><br><span class="cap">{ts} PDT · '
+                f'<img src="{p}" width="400"><br><span class="cap">{ts} {tz_abbr(t_)} · '
                 f'rng {r_:.0f} m · {a_:.1f}° off boresight</span></span>')
     return cells
 
 
 FOV_CONE_HALF_DEG, FOV_CONE_LEN = 6.0, 500.0   # 12° full cone, ≤500 m — standard
 FOV_GRID_HZ = 5.0    # the event merge/drop rules (0.7 s / 0.4 s) are tuned to this rate
+FFMPEG_FALLBACK = "/home/omar.syed/.local/share/mamba/envs/sensorenv/bin/ffmpeg"   # legacy path
+
+
+def ffmpeg_bin():
+    """The ffmpeg executable the FOV render will use, or None. Order: env
+    SEAWALL_FFMPEG (an explicit path — a non-executable value DISABLES ffmpeg, handy
+    for testing the skip path), PATH, the running interpreter's bin/ (the
+    sensorenv env), the legacy absolute fallback."""
+    import shutil
+    env = os.environ.get("SEAWALL_FFMPEG")
+    if env is not None:
+        return env if (os.path.isfile(env) and os.access(env, os.X_OK)) else None
+    for cand in (shutil.which("ffmpeg"),
+                 os.path.join(os.path.dirname(sys.executable), "ffmpeg"),
+                 FFMPEG_FALLBACK):
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def fov_unavailable_html(reason):
+    """The FOV block's stand-in when it cannot be built (the tab itself is fine)."""
+    return ("<h4>Seeker FOV player — flight log + IR</h4>"
+            f'<p class="cap">Seeker FOV section unavailable for this build: {reason}.</p>')
 
 
 def _ulog_series(ulog_path, zoff, ant):
@@ -433,11 +474,24 @@ def build_fov_section(fov, outdir, tc=None, target=None, ant=None, trkV=None, na
     if target is None or ant is None or not fov.get("ulog") or not _g.glob(fov["ulog"]):
         print(f"  [fov] flight log not available ({fov.get('ulog')}) — FOV section skipped")
         return ""
+    # ffmpeg is only needed when the mp4 is not already rendered — decide BEFORE
+    # parsing the flight log / decoding the IR video so a box without ffmpeg
+    # skips the block in milliseconds instead of failing after a 2-minute render
+    video = fov.get("video")
+    if video:
+        mp4_cached = os.path.exists(os.path.join(
+            outdir, f"figs/fov_{os.path.splitext(os.path.basename(video))[0]}.mp4"))
+        if not mp4_cached and ffmpeg_bin() is None:
+            print("  [fov] ffmpeg not found (PATH, interpreter bin/, SEAWALL_FFMPEG) and no "
+                  f"cached mp4 — FOV section skipped for {name or os.path.basename(video)}")
+            return fov_unavailable_html("ffmpeg not found on this machine and no cached "
+                                        "render (install ffmpeg or run under the sensorenv "
+                                        "interpreter, then rebuild)")
     try:
         gps, att, nav, vel, t0u, t1u, takeoff = _ulog_series(fov["ulog"], float(fov["zoff"]), ant)
     except Exception as e:
         print(f"  [fov] flight log unreadable ({e}) — FOV section skipped")
-        return ""
+        return fov_unavailable_html(f"flight log unreadable ({e})")
     targ = np.asarray(target, float)
     half, clen = FOV_CONE_HALF_DEG, FOV_CONE_LEN
     # grid = ulog span ∩ target-truth span (np.interp extrapolates flat — clip it out)
@@ -734,7 +788,9 @@ def _fov_render(S, trkV, video, tcorr, cam, mp4_path, name, fox_label, ant):
             print(f"  [fov] {os.path.basename(mp4_path)} frame {j}/{len(grid)}", flush=True)
     out.release(); cap.release(); plt.close(fig)
 
-    ffmpeg = shutil.which("ffmpeg") or "/home/omar.syed/.local/share/mamba/envs/sensorenv/bin/ffmpeg"
+    ffmpeg = ffmpeg_bin()
+    if ffmpeg is None:
+        raise RuntimeError(f"ffmpeg not found — MJPG intermediate kept at {tmp_avi}")
     r = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", tmp_avi,
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
                         "-pix_fmt", "yuv420p", "-g", str(FPSV * 2),
@@ -1003,19 +1059,76 @@ def write_page(path, title, sub, tabs):
 
 
 # ---------------- standard data access (archiver-dump convention) ----------------
-import glob as _glob, datetime as _dt
+import glob as _glob, datetime as _dt, re as _re
 import pandas as _pd
-PDT = _dt.timezone(_dt.timedelta(hours=-7))
+from zoneinfo import ZoneInfo as _ZoneInfo
+
+# Campaign timezone — DST-aware (zoneinfo), settable from the campaign config
+# ("tz"). Default America/Los_Angeles reproduces the Seawall reports exactly
+# (PDT = UTC-7 in August). `PDT` is kept as a compatibility alias of TZ.
+TZ_NAME = "America/Los_Angeles"
+TZ = _ZoneInfo(TZ_NAME)
+PDT = TZ
+
+
+def set_tz(name):
+    """Select the campaign timezone (IANA name) for every clock-string parse /
+    format in this module and in postprocess_report. Returns the ZoneInfo."""
+    global TZ_NAME, TZ, PDT
+    TZ_NAME = str(name or "America/Los_Angeles")
+    TZ = _ZoneInfo(TZ_NAME)
+    PDT = TZ
+    return TZ
+
+
+def tz_abbr(t=None):
+    """Zone abbreviation ('PDT', 'PST', 'CEST', ...) at epoch t (default: now)."""
+    dt = (_dt.datetime.fromtimestamp(float(t), TZ) if t is not None
+          else _dt.datetime.now(TZ))
+    return dt.strftime("%Z") or TZ_NAME
 
 
 def epoch_pdt(date_str, hms):
-    """'2026-08-28', '08:20:28' (PDT) -> epoch seconds."""
-    return _dt.datetime.strptime(date_str + " " + hms,
-                                 "%Y-%m-%d %H:%M:%S").replace(tzinfo=PDT).timestamp()
+    """'2026-08-28', '08:20:28' (campaign-local wall clock, see set_tz) -> epoch
+    seconds. Name kept for compatibility; tz-aware since the campaign 'tz' key.
+    Accepts 'HH:MM:SS', 'HH:MM:SS.f' and 'HH:MM'."""
+    s = str(hms).strip()
+    fmt = "%H:%M:%S.%f" if "." in s else ("%H:%M:%S" if s.count(":") == 2 else "%H:%M")
+    return _dt.datetime.strptime(f"{date_str} {s}",
+                                 f"%Y-%m-%d {fmt}").replace(tzinfo=TZ).timestamp()
+
+
+epoch_local = epoch_pdt
+
+
+def hms_local(t):
+    """epoch -> 'HH:MM:SS' in the campaign timezone."""
+    return _dt.datetime.fromtimestamp(float(t), TZ).strftime("%H:%M:%S")
+
+
+def truth_ids(dump_dir, pattern):
+    """Truth ids (csv basenames without .csv) that `pattern` matches in <dump>/mavlink/."""
+    return sorted(os.path.basename(p)[:-4]
+                  for p in _glob.glob(f"{dump_dir}/mavlink/{pattern}"))
+
+
+def id_label(ids, fallback=""):
+    """Short legend label for a set of truth ids as actually loaded: several
+    compids of one MAVLink port ('mav14551_2_0', 'mav14551_2_1', ...) -> '14551';
+    anything else -> the id(s) themselves ('mavlink_1_2', 'a+b')."""
+    ids = sorted({str(i)[:-4] if str(i).endswith(".csv") else str(i) for i in ids})
+    if not ids:
+        return fallback
+    ports = [_re.match(r"mav(\d+)_", i) for i in ids]
+    if all(ports) and len({m.group(1) for m in ports}) == 1:
+        return ports[0].group(1)
+    return "+".join(ids) if len(ids) <= 3 else f"{ids[0]}+{len(ids) - 1} more"
 
 
 def load_dump_truth(dump_dir, pattern, t0, t1, freeze_scrub=True):
-    """Merged, scrubbed truth ENU (t,E,N,U_hae) from archiver-dump mavlink csvs."""
+    """Merged, scrubbed truth ENU (t,E,N,U_hae) from dump mavlink csvs (archiver,
+    quickdump or dump_run_window layout — columns are addressed by NAME, extra
+    columns such as speed_mps/source and the time_pdt/time_local column are ignored)."""
     rows = []
     for fp in sorted(_glob.glob(f"{dump_dir}/mavlink/{pattern}")):
         df = _pd.read_csv(fp)
@@ -1030,19 +1143,29 @@ def load_dump_truth(dump_dir, pattern, t0, t1, freeze_scrub=True):
         ucol = "U_m_hae" if "U_m_hae" in df.columns else "U_m"
         rows.append(df[["t_epoch", "E_m", "N_m", ucol]].to_numpy())
     if not rows:
-        raise FileNotFoundError(f"no truth rows for {pattern} in {dump_dir}")
+        have = ", ".join(truth_ids(dump_dir, "*.csv")) or "none"
+        raise FileNotFoundError(f"no truth rows for {pattern} in {dump_dir} "
+                                f"(window {hms_local(t0)}-{hms_local(t1)} {tz_abbr(t0)}; "
+                                f"mavlink ids present: {have})")
     A = np.vstack(rows); A = A[np.argsort(A[:, 0])]
     _, u = np.unique(np.round(A[:, 0], 1), return_index=True)
     return A[u]
 
 
+TRACK13_COLS = ["t_epoch", "E_m", "N_m", "U_m", "vE_mps", "vN_mps", "vU_mps",
+                "sigE_m", "sigN_m", "sigU_m", "total_associations", "track_state",
+                "last_update_t"]
+
+
 def load_dump_track13(dump_dir, tid):
-    """13-col t,E,N,U,vE,vN,vU,sigE,sigN,sigU,assoc,state,lu from a dump track csv."""
+    """13-col t,E,N,U,vE,vN,vU,sigE,sigN,sigU,assoc,state,lu from a dump track csv
+    (by column NAME — the extra truth_match_*/contributors/sigv*/track_type columns
+    of newer dumps are ignored)."""
     df = _pd.read_csv(f"{dump_dir}/tracks/track_{tid}.csv")
-    cols = ["t_epoch", "E_m", "N_m", "U_m", "vE_mps", "vN_mps", "vU_mps",
-            "sigE_m", "sigN_m", "sigU_m", "total_associations", "track_state",
-            "last_update_t"]
-    return df[cols].to_numpy()
+    missing = [c for c in TRACK13_COLS if c not in df.columns]
+    if missing:
+        raise KeyError(f"track_{tid}.csv lacks columns {missing}")
+    return df[TRACK13_COLS].to_numpy(float)
 
 
 def load_traj_csv_truth(csv_path, ant):

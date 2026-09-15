@@ -24,7 +24,12 @@ For "what happened today", do not hand-author anything. Dump, then:
 ```
 cd scripts
 python quicklook_report.py --type auto --day 2026-08-28 --dumps <dump1> <dump2> --out <report_root>
+# straight from a live unit (dump + manifest + build, ~30 s for a 13-minute window):
+python quicklook_report.py --type auto --mongo "mru=43,run=6aecec5e,jobs=21627-23147,label=ep1" --target 'mavlink_1_2*' --interceptor none --out <report_root>
 ```
+`--tz` sets the local zone (default America/Los_Angeles, DST-aware); target and
+interceptor patterns default to `mav*_1_*` / `mav*_2_*` and must be given when a
+site names its drones differently.
 
 It builds the manifest if none is given, fills `templates/tracking_day.json` or
 `templates/engagement_day.json` from it (windows, laps, best realistic pass per
@@ -99,11 +104,18 @@ Your judgment here, recorded in `DAY_SUMMARY.md` notes:
   a "pass" against a parked interceptor, a formation-flight dip, or a frozen
   sample is not a pass. Refine CPA time ±10 s; 1 Hz truth under-reads a 40 m/s
   crossing by about 2×.
-- **Steals vs drag vs corruption**: steal = identity flips sides after a pass
-  (formal rule); drag-and-die = the track is pulled off and dies without
-  flipping; corruption = identity holds but the state runs away at the pass.
-  Name every event with run id, track id, and PDT time. Everything that flips
-  is a "track steal" — never "capture".
+- **Steals vs drag vs corruption vs runaway**: the manifest classifies them
+  (`steal_events`, `drag_and_die`, `corruption_events`); read all three plus
+  `feed_freezes`, `clutter_tracks`, `pinned_altitude_tracks`,
+  `speed_filter_kills` before writing a word. Steal = identity flips sides
+  after a pass; drag-and-die = pulled off and dies without flipping;
+  corruption = identity holds, state runs away at the pass and returns; a
+  track that diverges after the pass and never returns is a post-pass runaway
+  (8/27 trk 633) and is judged from the error window. Name every event with
+  run id, track id, and local time. Everything that flips is a "track steal"
+  — never "capture".
+- **Passes flagged FROZEN FEED** were computed on a dead-reckoned or frozen
+  truth sample; quote them as unreliable and prefer onboard logs.
 - **Frozen or teleporting truth**: if the target feed froze during a pass,
   recover the CPA from onboard logs or from head-on closing track pairs
   (`references/data-gotchas.md` §D) and mark the pass source accordingly.

@@ -4,9 +4,12 @@ day report built from the canonical modules (tracking_tab / engagement_tab).
 
     quicklook_report.py --type tracking|engagement|auto --day 2026-08-28 --dumps DIR [DIR ...]
                         [--manifest flights.json] [--target GLOB] [--interceptor GLOB]
-                        [--ant lat,lon,hae] [--geoid-n -31.4] [--out DIR] [--title ...]
-                        [--flights 1,2] [--pass 1:3,4:5] [--radar-rollup] [--server-base URL]
-                        [--config-out day.json] [--no-build]
+                        [--ant lat,lon,hae] [--geoid-n -31.4] [--tz America/Los_Angeles]
+                        [--out DIR] [--title ...] [--flights 1,2] [--pass 1:3,4:5]
+                        [--radar-rollup] [--server-base URL] [--config-out day.json] [--no-build]
+    quicklook_report.py --mongo "mru=43,run=6aecec5e,jobs=21627-23147,label=ep1" [--dump-root DIR] ...
+                        # live unit: dump the window with dump_run_window.py first, then as above
+                        # (keys: mru|host, run, jobs=A-B | t0=..,t1=.. ("YYYY-MM-DD HH:MM"), label, root, no_adsb)
     quicklook_report.py --build-only day.json        # re-run only the build after editing the JSON
 
 What it does
@@ -32,11 +35,14 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(os.path.dirname(HERE), "templates")
-PDT = timezone(timedelta(hours=-7))
+TZ_NAME = "America/Los_Angeles"          # --tz; DST-aware (PDT/PST), written to the config as "tz"
+TZ = ZoneInfo(TZ_NAME)
+PDT = TZ                                 # compatibility alias
 sys.path.insert(0, HERE)
 
 TIMES = []          # (label, seconds) — filled by the phase wrappers
@@ -55,8 +61,16 @@ def hms_of(s):
     return s[:8]
 
 
+def set_tz(name):
+    global TZ_NAME, TZ, PDT
+    TZ_NAME = name or "America/Los_Angeles"
+    TZ = ZoneInfo(TZ_NAME)
+    PDT = TZ
+
+
 def epoch_pdt(day, hms):
-    return datetime.strptime(f"{day} {hms}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=PDT).timestamp()
+    """campaign-local 'HH:MM:SS' on day -> epoch (tz-aware; name kept for compatibility)."""
+    return datetime.strptime(f"{day} {hms}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ).timestamp()
 
 
 def md(day):
@@ -267,10 +281,14 @@ def fill_common(cfg, a, meta, run8, kind):
                   f"(auto-filled from flights.json; narratives pending)")
     cfg["out_root"] = os.path.abspath(a.out)
     cfg["server_base"] = a.server_base or ""
+    cfg["tz"] = TZ_NAME
+    cfg["target_pattern"] = a.target_csv
+    cfg["interceptor_pattern"] = a.inter_glob
     cfg["rollup_html"] = ""
     rr = cfg.pop("_radar_rollup_disabled", None)
     if a.radar_rollup and rr is not None:
-        rr["days"] = [{"label": md(a.day), "dirs": [os.path.abspath(d) for d in a.dumps]}]
+        rr["days"] = [{"label": md(a.day), "dirs": [os.path.abspath(d) for d in a.dumps],
+                       "target_pattern": a.target_csv, "interceptor_pattern": a.inter_glob}]
         cfg["radar_rollup"] = rr
     elif rr is not None:
         cfg["_radar_rollup_disabled"] = rr
@@ -290,22 +308,9 @@ def fill_tracking(cfg, a, man, meta, ant, target_csv):
     for f in flights:
         laps = [(hms_of(s["t0_pdt"]), hms_of(s["t1_pdt"])) for s in f.get("segments", []) if s.get("type") == "loop"]
         wins.append((hms_of(f["t0_pdt"]), hms_of(f["t1_pdt"]), laps))
-    if len(wins) == 1:
-        t0, t1, laps = wins[0]
-        if len(laps) >= 2:                       # split at a lap boundary
-            k = len(laps) // 2
-            wins = [(t0, laps[k - 1][1], laps[:k]), (laps[k][0], t1, laps[k:])]
-            print(f"[quicklook] one flight in the manifest -> split into two at the lap {k}/{k + 1} boundary "
-                  f"({laps[k][0]}); tracking_tab needs exactly two flight windows")
-        else:
-            e0, e1 = epoch_pdt(a.day, t0), epoch_pdt(a.day, t1)
-            mid = datetime.fromtimestamp((e0 + e1) / 2, PDT).strftime("%H:%M:%S")
-            wins = [(t0, mid, []), (mid, t1, [])]
-            print(f"[quicklook] one flight, no laps -> split at its midpoint {mid}")
-    elif len(wins) > 2:
-        print(f"[quicklook] {len(wins)} flights in the manifest; tracking_tab takes exactly two — using "
-              f"flights {flights[0].get('n')} and {flights[1].get('n')} (choose with --flights a,b)")
-        wins = wins[:2]
+    # tracking_tab takes 1..N flight windows (one fast2_F<n> each) — no more splitting
+    # a single flight in two or dropping the third; --flights a,b still selects
+    print(f"[quicklook] {len(wins)} flight window(s) -> tracking day with {len(wins)} flight(s)")
     pr = day["prep"]
     pr["dump"] = os.path.abspath(a.dumps[0])
     if len(a.dumps) > 1:
@@ -322,10 +327,10 @@ def fill_tracking(cfg, a, man, meta, ant, target_csv):
     pr["laps_pdt"] = laps_pdt
     day["flight_keys"] = keys
     pr.setdefault("gate_m", 350.0)
-    nl = sorted({len(v) for v in [[k for k in keys if k.startswith(f"F{i}")] for i in (1, 2)]})
-    lap_txt = f" × {nl[0]} laps" if nl == [nl[0]] and nl[0] > 1 else ""
+    nl = sorted({len([k for k in keys if k.startswith(f"F{i}R")]) for i in range(1, len(wins) + 1)})
+    lap_txt = f" × {nl[0]} laps" if len(nl) == 1 and nl[0] > 1 else ""
     day["id"] = a.day
-    day["title"] = f"{md(a.day)} — Tracking (2 flights{lap_txt})"
+    day["title"] = f"{md(a.day)} — Tracking ({len(wins)} flight{'s' if len(wins) != 1 else ''}{lap_txt})"
     day["sub"] = f"run {run8}"
     y, m, d = (int(x) for x in a.day.split("-"))
     day["init"] = {"day": [y, m, d], "ant": [float(ant[0]), float(ant[1]), float(ant[2])],
@@ -333,7 +338,7 @@ def fill_tracking(cfg, a, man, meta, ant, target_csv):
     day["notes_html"] = ""
     day["key_message_html"] = ""
     # factual numbers from the manifest (labelled line per metric)
-    trs = [f.get("tracking", {}) for f in flights[:2]]
+    trs = [f.get("tracking", {}) for f in flights]
     az = [t.get("az_bias_deg") for t in trs if t.get("az_bias_deg") is not None]
     cov = [t.get("coverage_pct") for t in trs if t.get("coverage_pct") is not None]
     her = [t.get("med_horiz_err_m", t.get("median_horiz_err_m")) for t in trs]
@@ -389,7 +394,8 @@ def fill_engagement(cfg, a, man, meta, ant, target_csv, inter_glob):
         t_hms = hms_of(p["t_pdt"])
         dump = dump_for(a.dumps, tid, a.day, t_hms, target_csv)
         e = json.loads(json.dumps(proto))
-        e["name"] = f"{md(a.day)} Flight {n} — pass {p.get('n', '?')} ({t_hms} PDT)"
+        abbr = datetime.fromtimestamp(epoch_pdt(a.day, t_hms), TZ).strftime("%Z") or TZ_NAME
+        e["name"] = f"{md(a.day)} Flight {n} — pass {p.get('n', '?')} ({t_hms} {abbr})"
         e["tab_label"] = f"Flight {n}"
         e["dump"] = os.path.abspath(dump)
         e["interceptor_pattern"] = inter_glob
@@ -474,13 +480,18 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--type", default="auto", choices=["auto", "tracking", "engagement"])
-    ap.add_argument("--day", help="YYYY-MM-DD (PDT calendar day)")
+    ap.add_argument("--day", help="YYYY-MM-DD (campaign-local calendar day, see --tz)")
     ap.add_argument("--dumps", nargs="+", help="dump dir(s): mavlink/, tracks/, meta.json")
     ap.add_argument("--manifest", help="flights.json (default: run build_flight_manifest.py on the dumps)")
     ap.add_argument("--target", help="target truth csv/glob, e.g. mav14550_1_1.csv (default: manifest tracking.target)")
     ap.add_argument("--interceptor", help="interceptor truth glob, e.g. 'mav14551_2_*.csv' (default: derived from mavlink/)")
     ap.add_argument("--ant", help="lat,lon,hae override (default: meta.json)")
     ap.add_argument("--geoid-n", type=float, default=None, help="site HAE-MSL (default meta.json geoid_n_m, else -31.4)")
+    ap.add_argument("--tz", default=None, help="campaign IANA timezone for every clock string (default: the dump's "
+                                              "meta.json 'tz', else America/Los_Angeles)")
+    ap.add_argument("--mongo", help="live unit instead of --dumps: 'mru=43,run=6aecec5e,jobs=21627-23147,label=ep1' "
+                                    "(or host=, t0=/t1= 'YYYY-MM-DD HH:MM', root=, no_adsb=1); runs dump_run_window.py")
+    ap.add_argument("--dump-root", help="where --mongo dumps land (default <out>/dumps)")
     ap.add_argument("--out", help="report root (default ./quicklook_<day>)")
     ap.add_argument("--title", help="Rollup page title")
     ap.add_argument("--flights", help="comma list of manifest flight numbers to use (tracking: exactly two)")
@@ -502,13 +513,50 @@ def main():
         _t("TOTAL quicklook", t_all)
         print_times()
         return
+    if a.mongo:
+        # live unit: dump first (dump_run_window.py via postprocess_report.run_dumper),
+        # then continue exactly as with --dumps
+        t0 = time.perf_counter()
+        import postprocess_report as P
+        mg = {}
+        for tok in a.mongo.split(","):
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                mg[k.strip()] = v.strip()
+        for k in ("mru", "port"):
+            if k in mg: mg[k] = int(mg[k])
+        for k in ("no_adsb", "no_obs", "overwrite"):
+            if k in mg: mg[k] = str(mg[k]).lower() in ("1", "true", "yes")
+        a.out = os.path.abspath(a.out or f"quicklook_{a.day or 'mongo'}")
+        os.makedirs(a.out, exist_ok=True)
+        P.CAMPAIGN.update(tz=a.tz or TZ_NAME, out_root=a.out,
+                          dump_root=os.path.abspath(a.dump_root) if a.dump_root else None,
+                          geoid_n=a.geoid_n)
+        dump = P.run_dumper(mg, a.day)
+        a.dumps = (a.dumps or []) + [dump]
+        _t("dump_run_window.py (live mongo -> dump dir)", t0)
+        if not a.day:
+            m = json.load(open(os.path.join(dump, "meta.json")))
+            a.day = m.get("day") or os.path.basename(os.path.dirname(dump))
+            print(f"[quicklook] --day taken from the dump: {a.day}")
     if not (a.day and a.dumps):
-        ap.error("--day and --dumps are required (or --build-only CFG)")
+        ap.error("--day and --dumps are required (or --mongo SPEC, or --build-only CFG)")
     for d in a.dumps:
         if not os.path.isdir(os.path.join(d, "mavlink")):
             sys.exit(f"not a dump dir (no mavlink/): {d}")
     a.out = os.path.abspath(a.out or f"quicklook_{a.day}")
     os.makedirs(a.out, exist_ok=True)
+    # timezone: --tz > the dump's meta.json 'tz' (dump_run_window writes it) > LA
+    if not a.tz:
+        for d in a.dumps:
+            try:
+                a.tz = json.load(open(os.path.join(d, "meta.json"))).get("tz") or None
+            except Exception:
+                pass
+            if a.tz:
+                break
+    set_tz(a.tz or "America/Los_Angeles")
+    print(f"[quicklook] timezone {TZ_NAME}")
 
     # 1. manifest
     t0 = time.perf_counter()
@@ -527,6 +575,7 @@ def main():
             cmd += ["--interceptor", a.interceptor[:-4] if a.interceptor.endswith(".csv") else a.interceptor]
         if a.type != "auto":
             cmd += ["--type", a.type]
+        cmd += ["--tz", TZ_NAME]
         print("[quicklook] building manifest:", " ".join(cmd))
         subprocess.run(cmd, check=True)
         man = json.load(open(os.path.join(mdir, "flights.json")))
@@ -542,6 +591,9 @@ def main():
     if not ant or len(ant) < 3:
         sys.exit("no antenna origin: meta.json lacks 'antenna'/'antenna_origin_lat_lon_haeM' — pass --ant lat,lon,hae")
     flights = manifest_flights(man)
+    if a.flights:                          # --type auto must judge only the selected flights
+        want = [int(x) for x in a.flights.split(",")]
+        flights = [f for f in flights if f.get("n") in want] or flights
     man_target = next((f.get("tracking", {}).get("target") for f in flights if f.get("tracking", {}).get("target")), None)
     if a.target:
         target_csv = resolve_pattern(a.dumps, a.target, "mav*_1_*")
@@ -552,6 +604,7 @@ def main():
     else:
         target_csv = resolve_pattern(a.dumps, None, "mav*_1_*")
     inter_glob = resolve_pattern(a.dumps, a.interceptor, "mav*_2_*")
+    a.target_csv, a.inter_glob = target_csv, inter_glob        # -> campaign-level patterns
     kind = a.type
     if kind == "auto":
         kind = "engagement" if any(pass_ok(p) for f in flights for p in f.get("passes", [])) else "tracking"
