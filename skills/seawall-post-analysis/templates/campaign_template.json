@@ -1,0 +1,180 @@
+{
+ "_comment": "Campaign config template for track_correlation/postprocess_report.py — a NEW two-day campaign (one tracking day + one engagement day) with a radar rollup. Structure copied from seawall_week_0824.json (the real 8/24 campaign). Replace every <PLACEHOLDER>; keys starting with '_comment' are ignored by the code (every read is .get()), but do NOT put them inside fixed-length list rows (flights_pdt triples, steal_examples 5-tuples, init.day, ant). Numeric placeholders (<ANT_LAT> etc.) MUST become numbers, not strings, before running. Run: cd /home/omar.syed/Test_Environment/track_correlation && micromamba run -n sensorenv python postprocess_report.py <this file>. See references/campaign-config.md for every key.",
+ "_comment_placeholders": {
+  "<MRU>": "unit number, e.g. 91 (mongo host 10.1<MRU>.28.205)",
+  "<CAMPAIGN>": "short slug for the report dir, e.g. seawall_week_0914",
+  "<WEEK_ROOT>": "archive root, e.g. /home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_9-14",
+  "<DATE1>/<DATE2>": "YYYY-MM-DD of the tracking / engagement day (day ids MUST be dates for the standalone link rewrite)",
+  "<RUN8_A>/<RUN8_B>": "first 8 hex of the run collection for each day",
+  "<DUMP_DIR_A>/<DUMP_DIR_B>": "quickdump dirs, e.g. <WEEK_ROOT>/<DATE1>/<RUN8_A>_flight1_quickdump (mavlink/, tracks/, meta.json)",
+  "<ANT_LAT>,<ANT_LON>,<ANT_HAE_M>": "per-deployment antenna origin from the dump's meta.json 'antenna' (or 'antenna_origin_lat_lon_haeM') — NEVER reuse another day's",
+  "<GEOID_N>": "site HAE-minus-MSL in metres (Seawall = -31.4). Must match corr_lib.GEOID_N used when the dump was written",
+  "<TARGET_CSV>": "exact target truth csv name in <dump>/mavlink/, e.g. mav14550_1_1.csv (ls the dir — the compid suffix changes)",
+  "<INTERCEPTOR_GLOB>": "interceptor truth glob, e.g. mav14551_2_*.csv (several compids are merged)",
+  "<HH:MM:SS>": "PDT clock strings (fixed UTC-7 in the code — see campaign-config.md 'Timezone')",
+  "<TRACK_ID>": "radar track id alive at the featured pass (from flights.json tracking.target_track_spans)"
+ },
+
+ "title": "Seawall Week of <M-DD> — Campaign Report",
+ "sub": "MRU<MRU> · <DATE1> → <DATE2> · standard post-process pipeline: per-day reports from the two canonical modules, stitched into this rollup",
+ "out_root": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/<CAMPAIGN>_report",
+ "server_base": "http://172.18.1.28:8899/<CAMPAIGN>_report",
+ "_comment_out_root": "out_root MUST live under the :8899 http.server root (VP_TrackAnalysis/mru91_track2895) and server_base must be its URL; optionally symlink <WEEK_ROOT>/reports/<CAMPAIGN>_report -> out_root",
+
+ "rollup_html": "",
+ "_comment_rollup_html": "HTML appended under the auto-built Days card table in the Overall Rollup tab: the campaign in one arc (8/24 used one <h4> + one <p>).",
+
+ "days": [
+  {
+   "_comment": "TRACKING day. Uses prep (synthesise mission inputs from the dump) — never bare 'mdir' (that selects the hard-coded 8/26 MRU91 structure). Exactly TWO flight windows; flight_keys F1R1/F2R1 only.",
+   "id": "<DATE1>",
+   "title": "<M/D> — Tracking (2 flights)",
+   "type": "tracking",
+   "sub": "run <RUN8_A> · <pre-cal | post-cal | note>",
+   "prep": {
+    "dump": "<DUMP_DIR_A>",
+    "target_pattern": "<TARGET_CSV>",
+    "ant_hae_m": "<ANT_HAE_M>",
+    "_comment_ant_hae_m": "number; must equal init.ant[2]",
+    "flights_pdt": [
+     ["<DATE1>", "<HH:MM:SS flight 1 takeoff>", "<HH:MM:SS flight 1 landing>"],
+     ["<DATE1>", "<HH:MM:SS flight 2 takeoff>", "<HH:MM:SS flight 2 landing>"]
+    ],
+    "_comment_flights_pdt": "from flights.json t0_pdt/t1_pdt; exactly two rows (init_mission loads fast2_F1 and fast2_F2 only). One real flight -> split it at a lap boundary into two rows.",
+    "out_mdir": "<WEEK_ROOT>/<DATE1>/mission_prepped",
+    "gate_m": 350.0,
+    "_comment_gate_m": "constant: track median-distance-to-truth gate (m) for FLIGHT_TRACKS; 350 is the standard"
+   },
+   "init": {
+    "day": [2026, 9, 16],
+    "_comment_day": "[Y, M, D] of <DATE1> as integers",
+    "ant": ["<ANT_LAT>", "<ANT_LON>", "<ANT_HAE_M>"],
+    "_comment_ant": "three numbers from meta.json antenna",
+    "geoid_n": "<GEOID_N>"
+   },
+   "notes_html": "",
+   "_comment_notes_html": "REQUIRED non-empty in practice: '' falls back to the ORIGINAL 8/26 key-findings text. One <p><b>Key message: ...</b> ...</p> (+ optional <ul>) describing az bias, coverage, error, continuity for this day. NOTE the Summary <h2> above it is hard-coded '2026-08-26, MRU91 run Turquoise_Emu' in tracking_tab.build_summary_tab — edit the module for a new campaign.",
+   "flight_keys": ["F1R1", "F2R1"],
+   "key_message_html": "",
+   "_comment_key_message_html": "Rollup card column 2, e.g. '<b>Cal applied — residual az −0.4°</b>; 25 m corrected; continuity association-limited'",
+   "numbers_html": "",
+   "_comment_numbers_html": "Rollup card column 3, e.g. 'Az bias: <b>−0.4°</b><br>Coverage: <b>90%</b><br>Median error: 40 m'"
+  },
+  {
+   "_comment": "ENGAGEMENT day. One entry per featured pass. All clock strings resolve on 'date' with the fixed UTC-7 converter.",
+   "id": "<DATE2>",
+   "title": "<M/D> — Engagements (<N> flights)",
+   "type": "engagement",
+   "sub": "run <RUN8_B>",
+   "date": "<DATE2>",
+   "ant": ["<ANT_LAT>", "<ANT_LON>", "<ANT_HAE_M>"],
+   "_comment_ant": "three numbers from THIS day's meta.json antenna (per-deployment)",
+   "overview_html": "",
+   "_comment_overview_html": "optional: non-empty adds a leading 'Overview' tab with this HTML; '' -> no Overview tab",
+   "engagements": [
+    {
+     "name": "<M/D> Flight 1 — pass <n> (<HH:MM:SS> PDT)",
+     "tab_label": "Flight 1",
+     "dump": "<DUMP_DIR_B>",
+     "interceptor_pattern": "<INTERCEPTOR_GLOB>",
+     "target": {
+      "pattern": "<TARGET_CSV>",
+      "_comment": "alternative when the MAVLink truth froze: {\"traj_csv\": \"/abs/onboard_gps_traj.csv\"} with columns utc_s,lat,lon,alt_hae_m"
+     },
+     "window_pdt": ["<HH:MM:SS flight start>", "<HH:MM:SS flight end>"],
+     "_comment_window_pdt": "whole flight/engagement window (drives truth loading and the Overview figure), not just the pass",
+     "cpa_seed_pdt": "<HH:MM:SS>",
+     "_comment_cpa_seed_pdt": "from flights.json passes[].t_pdt; refined by eng_plots.cpa within +-20 s",
+     "track_id": "<TRACK_ID>",
+     "_comment_track_id": "integer; <dump>/tracks/track_<id>.csv must exist",
+     "gif": "figs/eng_<TRACK_ID>_<HHMMSS>.gif",
+     "summary_html": "<p><b>Key message: ...</b> Closest approach <b>{cpa_truth:.0f} m truth-truth</b>, {cpa_track:.0f} m to track {track_id}.</p>",
+     "_comment_summary_html": "only {cpa_truth} {cpa_track} {track_id} are substituted; any other {brace} raises KeyError",
+     "post_html": "",
+     "fov": {
+      "_comment": "OPTIONAL — delete this whole 'fov' block when there is no interceptor ulog + IR video. zoff = flight-controller clock offset in seconds measured by position xcorr vs truth (8/27: 36002.0; 8/28: 36001.3-36001.8). Use EITHER cam{fps,onset_frame} (frame 0 anchored to ulog takeoff) OR camwarp npz.",
+      "ulog": "<WEEK_ROOT>/flight_logs/<day>/Zeus/Logs/LOG00<NN>*.ulg",
+      "zoff": "<ZOFF_S>",
+      "video": "<WEEK_ROOT>/flight_logs/<day>/Zeus/Media/raw_camera_<yyyymmdd>_<hhmmss>.mkv",
+      "cam": {"fps": "<FPS>", "onset_frame": "<ONSET_FRAME>"},
+      "target_label": "<TARGET_ID> truth feed"
+     }
+    }
+   ],
+   "key_message_html": "",
+   "numbers_html": "",
+   "_comment_numbers_html": "e.g. 'Best CPA: <b>21 m</b><br>Passes &lt;75 m: 10 of 23<br>Track steals: <b>3</b>'"
+  }
+ ],
+
+ "radar_rollup": {
+  "_comment": "Every numeric figure here is computed at build time from 'days[].dirs'; only the *_html narratives and the example pointers are authored. The target csv in each dir MUST match mavlink/mav14550*.csv (toxic_zones.pick_truth_csvs). Omit 'az_bias_example' (it requires the legacy 8/26 mission dir).",
+  "intro_html": "",
+  "az_bias_html": "",
+  "_comment_az_bias_html": "section 1 narrative; 8/24 embedded a <table class='st'> of day / azimuth bias / state here",
+  "turns_html": "",
+  "corruption_html": "",
+  "steals_html": "",
+  "heatmap_html": "",
+  "days": [
+   {
+    "label": "<M/D tracking day>",
+    "dirs": ["<DUMP_DIR_A>"],
+    "_comment": "scoreable day: all dump dirs of the day (merged). For a non-scoreable day use {\"label\": ..., \"scoreable\": false, \"note\": \"...\", \"az_bias_cfg\": -2.2}"
+   },
+   {
+    "label": "<M/D engagement day>",
+    "dirs": ["<DUMP_DIR_B>"]
+   }
+  ],
+  "cell_m": 30.0,
+  "min_dwell": 2,
+  "_comment_cells": "constants used by the 8/24 report (heat-map cell size m, min truth samples per cell)",
+  "steal_examples": [
+   ["<M/D>", "<RUN8_B>", "trk <TRACK_ID>", "<HH:MM:SS> (F1 pass <n>)", "<what happened: STOLEN by the interceptor / dragged and died / handover gap>"]
+  ],
+  "_comment_steal_examples": "narrative table rows [day, run, track, time, what] — fixed 5 elements, no _comment inside; delete rows you cannot back with data",
+  "steal_views": [
+   {
+    "label": "Track steal — trk <TRACK_ID> · run <RUN8_B> · <M/D> Flight 1, pass <n> (<HH:MM:SS> PDT)",
+    "dump": "<DUMP_DIR_B>",
+    "date": "<DATE2>",
+    "t_steal_pdt": "<HH:MM:SS>",
+    "track_id": "<TRACK_ID>",
+    "ant": ["<ANT_LAT>", "<ANT_LON>", "<ANT_HAE_M>"],
+    "interceptor_pattern": "<INTERCEPTOR_GLOB>",
+    "target_pattern": "<TARGET_CSV>",
+    "cap": "",
+    "_comment": "animated +-10 s 2-D view + distance-duel plot; gif defaults to figs/steal_<track_id>.gif and is CACHED (delete to re-render). Remove this list entry if the campaign had no steal."
+   }
+  ],
+  "corruption_views": [
+   {
+    "label": "Track corruption — trk <TRACK_ID> · run <RUN8_B> · <M/D> Flight 1 (<HH:MM:SS> PDT)",
+    "dump": "<DUMP_DIR_B>",
+    "date": "<DATE2>",
+    "t_steal_pdt": "<HH:MM:SS CPA>",
+    "track_id": "<TRACK_ID>",
+    "ant": ["<ANT_LAT>", "<ANT_LON>", "<ANT_HAE_M>"],
+    "interceptor_pattern": "<INTERCEPTOR_GLOB>",
+    "target_pattern": "<TARGET_CSV>",
+    "banner": "CPA",
+    "rel_label": "CPA",
+    "gif": "figs/corruption_<TRACK_ID>.gif",
+    "cap": "",
+    "_comment": "same loader as steal_views plus the az/el/range/alt error window +-12 s around t_steal_pdt. Remove if not needed."
+   }
+  ],
+  "turn_zoom": {
+   "dump": "<DUMP_DIR_A>",
+   "date": "<DATE1>",
+   "t_pdt": "<HH:MM:SS track death in the turn>",
+   "tracks": ["<DYING_TRACK_ID>", "<SUCCESSOR_TRACK_ID>"],
+   "win_s": 45,
+   "label": "The far <NE> turn — run <RUN8_A> · trk <DYING_TRACK_ID> † <HH:MM:SS> PDT",
+   "cap": "",
+   "target_pattern": "<TARGET_CSV>",
+   "_comment": "ONE zoomed figure of a track dying in a turn (first id = the dying track, checked for death within +3 s of t_pdt). Delete the whole block if there is no such event."
+  }
+ }
+}

@@ -1,0 +1,408 @@
+{
+ "title": "Seawall Week of 8-24 \u2014 Campaign Report",
+ "sub": "MRU91 \u00b7 2026-08-25 \u2192 08-28 \u00b7 standard post-process pipeline: per-day reports from the two canonical modules, stitched into this rollup",
+ "out_root": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/seawall_week_report",
+ "rollup_html": "<h4>The week in one arc</h4><p>The week reads as one arc: <b>fix the pointing, then fight the association.</b> 8/25 proved the \u22122.2\u00b0 azimuth bias made the target untrackable everywhere it flew. The overnight yaw-offset fix landed; 8/26 measured the \u22121.45\u00b0 residual and showed the radar is a 22\u201327 m sensor once that is corrected \u2014 while tracks fragmented (12 ids/flight) against continuous detections. 8/27 moved to engagements and exposed the close-pass regime: error inflating exactly at endgame, one guidance dash flown inside a track handover gap, and no target track during the killing dive. 8/28 delivered the week's engagements \u2014 21 m and 32 m \u00d72 at up to 99.8% coverage with the cal holding below the 1\u00b0 reporting bar \u2014 and matured the close-pass problem into identity corruption: three track steals at the crossings.</p>",
+ "days": [
+  {
+   "id": "2026-08-25",
+   "title": "8/25 \u2014 Tracking (2 flights)",
+   "type": "tracking",
+   "sub": "run 707ccda9 \u00b7 pre-cal",
+   "prep": {
+    "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-25/707ccda9",
+    "target_pattern": "mav14551_2_2.csv",
+    "ant_hae_m": 141.76,
+    "flights_pdt": [
+     [
+      "2026-08-25",
+      "14:36:36",
+      "14:43:01"
+     ],
+     [
+      "2026-08-25",
+      "14:51:26",
+      "14:56:24"
+     ]
+    ],
+    "out_mdir": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-25/mission_prepped"
+   },
+   "init": {
+    "day": [
+     2026,
+     8,
+     25
+    ],
+    "ant": [
+     33.748053,
+     -115.339193,
+     141.76
+    ]
+   },
+   "notes_html": "<p><b>Key message: the pre-cal \u22122.2\u00b0 azimuth bias dominated everything.</b> The target drone (mav14550) was <b>never tracked at all</b> \u2014 0 target-side tracks, all day, everywhere it flew \u2014 so the panes below follow the second drone (mav14551_2_2), the only aircraft the radar held: 33\u201354% coverage, 92\u2013116 m errors that are almost entirely the azimuth bias projected at range. The tracker also sat idle until 14:39. This day is the why for the overnight yaw-offset fix.</p>",
+   "flight_keys": [
+    "F1R1",
+    "F2R1"
+   ],
+   "key_message_html": "<b>Pre-cal az bias \u22122.2\u00b0 dominated</b> \u2014 target drone never tracked; panes follow the only tracked drone",
+   "numbers_html": "Az bias: <b>\u22122.2\u00b0</b><br>Target coverage: <b>0%</b><br>Median error: 92\u2013116 m"
+  },
+  {
+   "id": "2026-08-26",
+   "title": "8/26 \u2014 Tracking (2 flights \u00d7 2 laps)",
+   "type": "tracking",
+   "sub": "run 9b22a989",
+   "mdir": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/mission_20260826",
+   "notes_html": "<p><b>Key message: cal applied \u2014 the residual azimuth bias is measured, small, and explains most of the remaining error.</b> Post-cal az <b>\u22121.45\u00b0</b> (el +0.5\u00b0, alt +21 m). Raw 65\u201368 m horizontal error collapses to <b>22\u201327 m</b> with the residual corrected offline \u2014 accuracy is calibration-limited, not sensor-limited. Continuity is the other story: 12 track ids per flight and 6 turn handovers against continuous ~2 det/s \u2014 association-limited, the thread that runs through the engagement days.</p>",
+   "flight_keys": [
+    "F1R1",
+    "F1R2",
+    "F2R1",
+    "F2R2"
+   ],
+   "key_message_html": "<b>Cal applied \u2014 residual az \u22121.45\u00b0 measured</b>; 22\u201327 m corrected; continuity association-limited",
+   "numbers_html": "Az bias: <b>\u22121.45\u00b0</b><br>Coverage: <b>85%</b><br>Median error: 65 m raw \u2192 <b>22\u201327 m</b> corrected"
+  },
+  {
+   "id": "2026-08-27",
+   "title": "8/27 \u2014 Engagements (2 flights)",
+   "type": "engagement",
+   "sub": "run 214a1a56",
+   "date": "2026-08-27",
+   "ant": [
+    33.74805607,
+    -115.33920787,
+    140.90765
+   ],
+   "engagements": [
+    {
+     "name": "8/27 Engagement 1 (09:51:28 PDT)",
+     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-27/214a1a56",
+     "interceptor_pattern": "mav14551_2_*.csv",
+     "target": {
+      "pattern": "mav14550_1_1.csv"
+     },
+     "window_pdt": [
+      "09:38:00",
+      "09:55:04"
+     ],
+     "cpa_seed_pdt": "09:51:28",
+     "track_id": 633,
+     "gif": "figs/eng_633_095128.gif",
+     "summary_html": "<p><b>Key message: first intercept attempts \u2014 and the first track corruption.</b> Closest approach <b>{cpa_truth:.0f} m truth-truth</b>; the radar track read {cpa_track:.0f} m. One guidance dash this engagement was flown entirely inside the 454\u2192633 track handover gap, and track error inflated right at endgame (a ~70 m pass read as 34 m; altitude ran away +280 m).</p>",
+     "post_html": "",
+     "tab_label": "Engagement 1",
+     "fov": {
+      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/Zeus/log_9_2026-8-26-23-53-02.ulg",
+      "zoff": 36002.0,
+      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/Camera/raw_camera_20260826_234538.mkv",
+      "camwarp": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/cache/camwarp_eng1.npz",
+      "target_label": "mav14550 truth feed"
+     }
+    },
+    {
+     "name": "8/27 Engagement 2 (10:28:03 PDT)",
+     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-27/214a1a56",
+     "interceptor_pattern": "mav14551_2_*.csv",
+     "target": {
+      "traj_csv": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/csv/log_62_2026-8-27-10-36-08_traj.csv"
+     },
+     "window_pdt": [
+      "10:24:57",
+      "10:31:09"
+     ],
+     "cpa_seed_pdt": "10:28:03",
+     "track_id": 1124,
+     "gif": "figs/eng_1124_102803.gif",
+     "summary_html": "<p><b>The radar was blind through the dive:</b> the target's MAVLink truth was frozen, and the only target track (1124) initiated 13 s after the dive bottom, 3.6 km out \u2014 too late to appear in the standard t\u221210\u2026t+5 CPA window below. Target truth here is the target's onboard GPS log; the 39 m CPA is GPS-to-GPS. Closest approach vs the late radar track (searched \u00b1120 s): <b>{cpa_track:.0f} m</b>.</p>",
+     "post_html": "",
+     "tab_label": "Engagement 2",
+     "fov": {
+      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/Zeus/log_10_2026-8-27-00-31-14.ulg",
+      "zoff": 36002.0,
+      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/Camera/raw_camera_20260827_002402.mkv",
+      "camwarp": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/cache/camwarp_eng2.npz",
+      "target_label": "Fox onboard GPS (log_62)"
+     }
+    }
+   ],
+   "key_message_html": "<b>First intercept attempts + first track corruption</b> \u2014 endgame error inflation, dash in a track gap, no track in the dive",
+   "numbers_html": "Best CPA: <b>72 m</b> (truth-truth)<br>Dive CPA: <b>39 m</b> (onboard GPS)<br>Verified passes: 2"
+  },
+  {
+   "id": "2026-08-28",
+   "title": "8/28 \u2014 Engagements (4 flights)",
+   "type": "engagement",
+   "sub": "run e65bd4f9",
+   "date": "2026-08-28",
+   "ant": [
+    33.748056,
+    -115.339204,
+    140.51
+   ],
+   "engagements": [
+    {
+     "name": "8/28 Flight 1 \u2014 pass 3 (07:23:47 PDT)",
+     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
+     "interceptor_pattern": "mav14551_2_*.csv",
+     "target": {
+      "pattern": "mav14550_1_1.csv"
+     },
+     "window_pdt": [
+      "07:19:49",
+      "07:27:48"
+     ],
+     "cpa_seed_pdt": "07:23:47",
+     "track_id": 177,
+     "gif": "figs/eng_177_072347.gif",
+     "summary_html": "<p><b>Cleanest tracking of the week (99.8% coverage) \u2014 and the clearest steal.</b> Closest approach <b>{cpa_truth:.0f} m truth-truth</b>, {cpa_track:.0f} m to track {track_id} \u2014 which at this very pass <b>flipped to the interceptor</b> (46 m to it vs 931 m to the target afterwards) and followed it for 73 s. Track 129 was dragged at pass 1 and died.</p>",
+     "post_html": "",
+     "tab_label": "Flight 1",
+     "fov": {
+      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0012*.ulg",
+      "zoff": 36001.3,
+      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_211914.mkv",
+      "cam": {
+       "fps": 15.37,
+       "onset_frame": 960
+      },
+      "target_label": "mav14550 truth feed"
+     }
+    },
+    {
+     "name": "8/28 Flight 2 \u2014 pass 2 (07:59:04 PDT)",
+     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
+     "interceptor_pattern": "mav14551_2_*.csv",
+     "target": {
+      "pattern": "mav14550_1_1.csv"
+     },
+     "window_pdt": [
+      "07:55:36",
+      "08:07:50"
+     ],
+     "cpa_seed_pdt": "07:59:04",
+     "track_id": 874,
+     "gif": "figs/eng_874_075904.gif",
+     "summary_html": "<p>Six passes, no identity loss; the day's longest coverage hole (79 s) fell mid-flight. Closest approach <b>{cpa_truth:.0f} m truth-truth</b>, {cpa_track:.0f} m to track {track_id}.</p>",
+     "post_html": "",
+     "tab_label": "Flight 2",
+     "fov": {
+      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0013*.ulg",
+      "zoff": 36001.8,
+      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_215643.mkv",
+      "cam": {
+       "fps": 16.2,
+       "onset_frame": 920
+      },
+      "target_label": "mav14550 truth feed"
+     }
+    },
+    {
+     "name": "8/28 Flight 3 \u2014 pass 7 (08:20:28 PDT)",
+     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
+     "interceptor_pattern": "mav14551_2_*.csv",
+     "target": {
+      "pattern": "mav14550_1_1.csv"
+     },
+     "window_pdt": [
+      "08:15:37",
+      "08:22:05"
+     ],
+     "cpa_seed_pdt": "08:20:28",
+     "track_id": 1291,
+     "gif": "figs/eng_1291_082028.gif",
+     "summary_html": "<p><b>The week's best pass</b> in an eight-pass sequence with clean identity throughout \u2014 proof the system can hold both objects through repeated sub-100 m passes when association holds. Closest approach <b>{cpa_truth:.0f} m truth-truth</b>, {cpa_track:.0f} m to track {track_id}.</p>",
+     "post_html": "",
+     "tab_label": "Flight 3",
+     "fov": {
+      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0014*.ulg",
+      "zoff": 36001.7,
+      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_221542.mkv",
+      "cam": {
+       "fps": 15.459,
+       "onset_frame": 240
+      },
+      "target_label": "mav14550 truth feed"
+     }
+    },
+    {
+     "name": "8/28 Flight 4 \u2014 pass 5 (08:38:56 PDT)",
+     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump",
+     "interceptor_pattern": "mav14551_2_*.csv",
+     "target": {
+      "pattern": "mav14550_1_1.csv"
+     },
+     "window_pdt": [
+      "08:34:31",
+      "08:42:55"
+     ],
+     "cpa_seed_pdt": "08:38:56",
+     "track_id": 1511,
+     "gif": "figs/eng_1511_083856.gif",
+     "summary_html": "<p><b>Tightest geometry of the week</b> (two 32 m passes; 5 m and 9 m horizontal) \u2014 and the mirror-image track steal: track 1551 was born ON the interceptor and <b>stolen by the target</b> at pass 6; 1440 dragged and died after pass 4. Closest approach <b>{cpa_truth:.0f} m truth-truth</b>, {cpa_track:.0f} m to track {track_id}.</p>",
+     "post_html": "",
+     "tab_label": "Flight 4",
+     "fov": {
+      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0015*.ulg",
+      "zoff": 36001.3,
+      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_223455.mkv",
+      "cam": {
+       "fps": 15.75,
+       "onset_frame": 136
+      },
+      "target_label": "mav14550 truth feed"
+     }
+    }
+   ],
+   "key_message_html": "<b>Much better engagements \u2014 and track steals</b>: 3 track steals at the crossings",
+   "numbers_html": "Best CPA: <b>21 m</b><br>Passes &lt;75 m: 10 of 23<br>Track steals: <b>3</b>"
+  }
+ ],
+ "radar_rollup": {
+  "intro_html": "<p>Every radar issue the campaign surfaced, in one place. Narrative sections are the day-report findings; the turn statistics and the heat map are computed from the archived data at build time.</p>",
+  "az_bias_html": "<p>The dominant error source of the week, measured independently every day at both the raw-observation and track level. The yaw-offset fix landed overnight 8/25\u21928/26; after that the residual stayed under the 1\u00b0 reporting bar and holds through redeploys.</p><table class='st'><tr><td><b>day</b></td><td><b>azimuth bias</b></td><td><b>state</b></td></tr><tr><td>8/25</td><td><b>\u22122.2\u00b0</b></td><td>pre-cal \u2014 target drone untrackable everywhere it flew; at 3 km a 2.2\u00b0 bias is a 115 m cross-range offset</td></tr><tr><td>8/26</td><td><b>\u22121.45\u00b0</b></td><td>post-fix residual; raw 65\u201368 m horizontal error collapses to 22\u201327 m with the residual corrected offline \u2014 accuracy is calibration-limited, not sensor-limited</td></tr><tr><td>8/27</td><td><b>\u22120.19\u00b0</b></td><td>cal holding (phase-1 measurement)</td></tr><tr><td>8/28</td><td><b>\u22120.21\u00b0 / \u22120.45\u00b0</b></td><td>live / recomputed \u2014 still under the reporting bar through the overnight redeploy</td></tr></table>",
+  "turns_html": "<p>Tracks are held on the straights and lost in the racetrack turns: detections stay continuous (~2/s) while association breaks as the target maneuvers, so tracks coast, go tentative, and hand over. 8/26 logged 12 track ids per flight with the handovers clustered at the turn ends, and the turn penalty is 1.7\u20131.9\u00d7 on 8/26\u20138/27. On 8/28 the ratio inverts (0.8\u00d7) \u2014 not because turns got better, but because the dominant holes that day sit on the STRAIGHT low-altitude eastern leg (the corridor in the heat map below), which outweighs the turn losses.</p>",
+  "steals_html": "<p>The close-pass failure mode matured over the week: on 8/27 the errors inflated at endgame (a ~70 m pass read as 34 m), one guidance dash was flown entirely inside the 454\u2192633 track handover gap, and there was no target track at all during the dive. On 8/28, with 23 scoreable passes, coverage was no longer the problem \u2014 a track always reacquired \u2014 but IDENTITY was: <b>3 track steals</b>. Track <b>177</b> was stolen by the interceptor after pass 3 (Flight 1); track <b>1551</b>, born on the interceptor, was stolen by the target at pass 6 (Flight 4); plus one drag-and-die (129). Track error at the pass is comparable to the miss distance itself, so radar-only endgame scoring is \u00b11 pass-width.</p>",
+  "heatmap_html": "<p>Where tracks go bad around the flight pattern: per 30 m cell (so the grid follows the actual truth line), the percentage of moving-target time with an ACTIVE track (confirmed and measurement-updated within \u00b10.75 s), combined over the scoreable days (8/26\u20138/28) on real terrain. Cells are colored by the <b>percentile of percent-active across all cells</b> \u2014 the bottom 15% of cells clamp to solid red \u2014 because most cells are near-perfect and a raw linear scale washes the structure out; hover any cell for its true active %. The recurring weak pocket is the low-altitude eastern leg (E +1.0\u20132.0 km) \u2014 line-of-sight, not range. 8/25 is excluded: zero target-side tracks all day under the pre-cal bias.</p>",
+  "days": [
+   {
+    "label": "8/25",
+    "scoreable": false,
+    "note": "not scoreable \u2014 0 target-side tracks all day (pre-cal az bias)",
+    "az_bias_cfg": -2.2
+   },
+   {
+    "label": "8/26",
+    "dirs": [
+     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-26/9b22a989"
+    ]
+   },
+   {
+    "label": "8/27",
+    "dirs": [
+     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-27/214a1a56"
+    ]
+   },
+   {
+    "label": "8/28",
+    "dirs": [
+     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
+     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
+     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump"
+    ]
+   }
+  ],
+  "cell_m": 30.0,
+  "min_dwell": 2,
+  "steal_examples": [
+   [
+    "8/27",
+    "214a1a56",
+    "trk 454 \u2192 633",
+    "09:47\u201309:51",
+    "handover gap between the two target tracks \u2014 one guidance dash was flown entirely inside it"
+   ],
+   [
+    "8/27",
+    "214a1a56",
+    "trk 1124",
+    "10:28",
+    "no target track during the dive \u2014 1124 initiated 13 s after the dive bottom, 3.6 km out"
+   ],
+   [
+    "8/28",
+    "e65bd4f9",
+    "trk 129",
+    "~07:21 (F1)",
+    "dragged off the target and died between passes 1 and 3"
+   ],
+   [
+    "8/28",
+    "e65bd4f9",
+    "trk 177",
+    "07:23:47 (F1 pass 3)",
+    "STOLEN by the interceptor \u2014 flipped sides after the pass and stayed there"
+   ],
+   [
+    "8/28",
+    "e65bd4f9",
+    "trk 1440",
+    "~08:38 (F4)",
+    "dragged and died after pass 4"
+   ],
+   [
+    "8/28",
+    "e65bd4f9",
+    "trk 1551",
+    "08:40:04 (F4 pass 6)",
+    "STOLEN by the target \u2014 the track was born on the interceptor and flipped to the target at the pass"
+   ]
+  ],
+  "steal_views": [
+   {
+    "label": "Track steal \u2014 trk 177 \u00b7 run e65bd4f9 \u00b7 8/28 Flight 1, pass 3 (07:23:47 PDT)",
+    "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
+    "date": "2026-08-28",
+    "t_steal_pdt": "07:23:47",
+    "track_id": 177,
+    "ant": [
+     33.748056,
+     -115.339204,
+     140.51
+    ],
+    "cap": "Run e65bd4f9 \u00b7 trk 177 \u00b7 steal at 07:23:47 PDT \u2014 animated \u00b110 s at 1\u00d7 real-time: trk 177 (green diamond) rides the target (orange) into the pass, then flips to the interceptor (blue) at the crossing and stays there. Arrows show each aircraft's velocity."
+   },
+   {
+    "label": "Track steal \u2014 trk 1551 \u00b7 run e65bd4f9 \u00b7 8/28 Flight 4, pass 6 (08:40:04 PDT)",
+    "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump",
+    "date": "2026-08-28",
+    "t_steal_pdt": "08:40:04",
+    "track_id": 1551,
+    "ant": [
+     33.748056,
+     -115.339204,
+     140.51
+    ],
+    "cap": "Run e65bd4f9 \u00b7 trk 1551 \u00b7 steal at 08:40:04 PDT \u2014 the mirror-image steal: trk 1551 was born on the interceptor (blue) and is stolen by the target (orange) at the pass. Same animation format, \u00b110 s at 1\u00d7 real-time."
+   }
+  ],
+  "corruption_html": "<p>Distinct from a steal: the track keeps the right identity but its STATE goes bad exactly at the crossing \u2014 error inflates at endgame, so radar-only miss scoring is \u00b11 pass-width. The clearest case: <b>run 214a1a56 (Ivory_Rattlesnake), 8/27 Engagement 1, trk 633 at 09:51:28 PDT</b> \u2014 a 72 m truth-truth pass that the track read as 44 m, with the elevation/altitude excursion right at CPA visible below. The same signature repeats on run e65bd4f9 (8/28): at Flight 4's 32 m passes the track error (59\u201367 m) exceeds the miss itself.</p>",
+  "corruption_views": [
+   {
+    "label": "Track corruption \u2014 trk 633 \u00b7 run 214a1a56 \u00b7 8/27 Engagement 1 (09:51:28 PDT)",
+    "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-27/214a1a56",
+    "date": "2026-08-27",
+    "t_steal_pdt": "09:51:28",
+    "track_id": 633,
+    "ant": [
+     33.74805607,
+     -115.33920787,
+     140.90765
+    ],
+    "banner": "CPA",
+    "rel_label": "CPA",
+    "gif": "figs/corruption_633.gif",
+    "cap": "The pass \u00b110 s at 1\u00d7 real-time (run 214a1a56, trk 633, 09:51:28 PDT): the track (green diamond) stays with the target through the crossing \u2014 identity holds \u2014 but its state runs away at CPA; the error panels below show the excursion."
+   }
+  ],
+  "az_bias_example": {
+   "mdir": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/mission_20260826",
+   "flight": 1,
+   "run": 2,
+   "caption_html": "Before / after the bias correction \u2014 run 9b22a989 (Turquoise_Emu), 8/26 Flight 1 \u00b7 Lap 2, straight from the day report: LEFT = RAW, as the radar reports (tracks sit rotated off the truth); RIGHT = the same window rotated by the measured \u22121.45\u00b0 residual (alignment check only \u2014 no correction is applied in the radar), the tracks fall onto the truth line."
+  },
+  "turn_zoom": {
+   "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-26/9b22a989",
+   "date": "2026-08-26",
+   "t_pdt": "08:46:41",
+   "tracks": [
+    367,
+    501
+   ],
+   "win_s": 45,
+   "label": "The far NE turn \u2014 run 9b22a989 \u00b7 trk 367 \u2020 08:46:41 PDT",
+   "cap": "Just the turn: run 9b22a989 (Turquoise_Emu), 8/26 Flight 1 \u00b7 Lap 2. trk 367 (purple) holds the target all the way into the far NE turn and dies at the apex at 08:46:41 PDT (\u2715); trk 501 (red) picks the target up through the turn exit \u2014 the id never survives the turn. Every far-turn drop of the week is listed below."
+  }
+ },
+ "server_base": "http://172.18.1.28:8899/seawall_week_report"
+}
