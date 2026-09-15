@@ -1,0 +1,135 @@
+{
+ "_comment": "TRACKING DAY template — a single-day campaign config for scripts/postprocess_report.py using the `prep` path (mission inputs synthesised from a dump dir). scripts/quicklook_report.py fills every <PLACEHOLDER> from flights.json + meta.json; a human can also fill it by hand. Keys starting with '_' are ignored by the code (every read is .get()) — but never put one inside a fixed-length list row (flights_pdt / laps_pdt triples, init.day, init.ant). Numeric placeholders (<ANT_LAT> <ANT_LON> <ANT_HAE_M> <YYYY> <MM> <DD>) MUST become numbers. Build: cd scripts && micromamba run -n sensorenv python postprocess_report.py <this file>  (or quicklook_report.py --build-only <this file> for timings).",
+ "_comment_placeholders": {
+  "<DAY>": "YYYY-MM-DD of the test day (day id MUST be a date). AUTO: --day",
+  "<M/D>": "short date for titles, e.g. 8/26. AUTO from --day",
+  "<RUN8>": "first 8 hex of the run collection. AUTO: meta.json run_id8 / run, else flights.json runs[0].run",
+  "<MRU>": "unit number for the page sub-line. AUTO: meta.json mru when present, else left as 'MRU?'",
+  "<DUMP_DIR>": "ONE dump dir with mavlink/, tracks/, meta.json (dump_run_window / quickdump / archiver layout; extra columns and the adsb/ folder are ignored). AUTO: first --dumps entry (prep reads a single dir — pass the dir that covers every flight)",
+  "<TARGET_PATTERN>": "target truth csv name/glob under <DUMP_DIR>/mavlink/, e.g. mav14550_1_1.csv or mav*_1_*.csv (a glob picks the LARGEST match). AUTO: --target, else flights.json tracking.target + .csv",
+  "<ANT_LAT>,<ANT_LON>,<ANT_HAE_M>": "per-deployment antenna origin. AUTO: meta.json 'antenna' or 'antenna_origin_lat_lon_haeM' (or --ant lat,lon,hae). prep.ant_hae_m must equal init.ant[2]",
+  "<HH:MM:SS>": "LOCAL clock strings in <TZ> (DST-aware). AUTO: flights.json flights[].t0_pdt/t1_pdt (flight windows) and segments[type=loop] (laps)",
+  "<OUT_ROOT>": "where <OUT_ROOT>/<DAY>/report.html + Rollup.html land. AUTO: --out. Put it under the :8899 http.server root and set server_base to share",
+  "<GEOID_N>": "site HAE-minus-MSL in metres (Seawall -31.4). AUTO: meta.json geoid_n_m, else --geoid-n (default -31.4)",
+  "<TZ>": "IANA timezone, e.g. America/Los_Angeles. AUTO: --tz, else the dump meta.json 'tz' (dump_run_window), else America/Los_Angeles",
+  "<INTERCEPTOR_PATTERN>": "interceptor truth glob (unused by the tracking tabs, recorded for the radar rollup). AUTO: --interceptor, else derived from mavlink/"
+ },
+ "title": "Quick look — <DAY> (tracking)",
+ "_comment_title": "page <title>/<h1> of Rollup.html. Analyst: rename for the real campaign ('Seawall Week of 9-14 — Campaign Report')",
+ "sub": "MRU<MRU> · run <RUN8> · quick-look build (auto-filled from flights.json; narratives pending)",
+ "out_root": "<OUT_ROOT>",
+ "server_base": "",
+ "_comment_server_base": "'' = no link rewrite in Rollup_standalone.html. Set to http://172.18.1.28:8899/<out_root basename> when out_root is under the served root",
+ "tz": "<TZ>",
+ "target_pattern": "<TARGET_PATTERN>",
+ "interceptor_pattern": "<INTERCEPTOR_PATTERN>",
+ "_comment_tz_patterns": "campaign-level timezone and truth-file globs (see campaign-config.md §1). prep.target_pattern may override the target glob per day.",
+ "rollup_html": "",
+ "_comment_rollup_html": "NARRATIVE (analyst): the campaign in one arc, appended under the auto Days table of the Overall Rollup tab",
+ "days": [
+  {
+   "_comment": "ONE tracking day. tracking_tab takes 1..N flight windows (one fast2_F<n> each): one row of flights_pdt per flight. Tabs = Summary + one per flight_keys entry ('F<flight>R<lap>' -> 'Flight N · Lap N'). init.ant is REQUIRED for a new site (quicklook fills it from meta.json).",
+   "id": "<DAY>",
+   "title": "<M/D> — Tracking (<N> flights × 2 laps)",
+   "_comment_title": "plain factual title; the parenthetical becomes the rollup card descriptor. AUTO (flight/lap counts from the manifest)",
+   "type": "tracking",
+   "sub": "run <RUN8>",
+   "prep": {
+    "dump": "<DUMP_DIR>",
+    "target_pattern": "<TARGET_PATTERN>",
+    "ant_hae_m": "<ANT_HAE_M>",
+    "flights_pdt": [
+     [
+      "<DAY>",
+      "<HH:MM:SS flight 1 start>",
+      "<HH:MM:SS flight 1 end>"
+     ],
+     [
+      "<DAY>",
+      "<HH:MM:SS flight 2 start>",
+      "<HH:MM:SS flight 2 end>"
+     ]
+    ],
+    "_comment_flights_pdt": "AUTO from flights.json t0_pdt/t1_pdt (clock part). One row per flight (1..N).",
+    "laps_pdt": {
+     "1,1": [
+      "<DAY>",
+      "<HH:MM:SS>",
+      "<HH:MM:SS>"
+     ],
+     "1,2": [
+      "<DAY>",
+      "<HH:MM:SS>",
+      "<HH:MM:SS>"
+     ],
+     "2,1": [
+      "<DAY>",
+      "<HH:MM:SS>",
+      "<HH:MM:SS>"
+     ],
+     "2,2": [
+      "<DAY>",
+      "<HH:MM:SS>",
+      "<HH:MM:SS>"
+     ]
+    },
+    "_comment_laps_pdt": "OPTIONAL lap windows keyed '<flight>,<lap>' -> one 'Flight N · Lap N' tab each (list them in flight_keys as F<flight>R<lap>). AUTO from flights.json segments[type=loop]; a flight without loops gets one lap = the whole flight. DELETE this key (and use flight_keys F1R1/F2R1) for one tab per flight. Lap windows inside the flight; the last lap runs to landing (no landing exclusion on prep days).",
+    "gate_m": 350.0,
+    "_comment_gate_m": "constant: median track-to-truth gate (m) selecting the flight's tracks; 350 is the standard",
+    "_comment_out_mdir": "optional 'out_mdir': where truthv.npz/fast2_F*.npz/analysis_stage1.json are written (default <out_root>/<DAY>/mission_inputs)"
+   },
+   "init": {
+    "day": [
+     "<YYYY>",
+     "<MM>",
+     "<DD>"
+    ],
+    "_comment_day": "[Y, M, D] integers of <DAY>. AUTO",
+    "ant": [
+     "<ANT_LAT>",
+     "<ANT_LON>",
+     "<ANT_HAE_M>"
+    ],
+    "_comment_ant": "three numbers from meta.json. AUTO",
+    "geoid_n": "<GEOID_N>"
+   },
+   "notes_html": "",
+   "_comment_notes_html": "NARRATIVE (analyst): the Summary tab's key-findings block — one <p><b>Key message: …</b></p> (+ optional <ul>) on az bias, coverage, accuracy, continuity. Empty -> a 'not yet written' placeholder renders (prep days never fall back to the 8/26 text).",
+   "flight_keys": [
+    "F1R1",
+    "F1R2",
+    "F2R1",
+    "F2R2"
+   ],
+   "_comment_flight_keys": "tab order; every key must exist in laps_pdt (or be F<n>R1 when laps_pdt is absent). AUTO",
+   "key_message_html": "",
+   "_comment_key_message_html": "NARRATIVE (analyst): rollup card column 2, e.g. '<b>Cal applied — residual az −1.45°</b>; 22–27 m corrected; continuity association-limited'",
+   "numbers_html": "",
+   "_comment_numbers_html": "rollup card column 3, labelled line-per-metric ('Az bias: <b>−1.45°</b><br>Coverage: <b>85%</b><br>Median error: 68 m raw → 27 m corrected'). AUTO from flights.json tracking (az_bias_deg, coverage_pct, med_horiz_err_m[_azcorr]) — verify before publishing"
+  }
+ ],
+ "_comment_radar_rollup": "The Radar Rollup tab is OPTIONAL and off in a quick look (absent key = no tab, ~15-40 s saved). To enable, rename '_radar_rollup_disabled' to 'radar_rollup' (quicklook: --radar-rollup). Its target = the LARGEST mavlink csv matching target_pattern (top-level or per rollup day).",
+ "_radar_rollup_disabled": {
+  "intro_html": "",
+  "az_bias_html": "",
+  "turns_html": "",
+  "corruption_html": "",
+  "steals_html": "",
+  "heatmap_html": "",
+  "days": [
+   {
+    "label": "<M/D>",
+    "dirs": [
+     "<DUMP_DIR>"
+    ],
+    "target_pattern": "<TARGET_PATTERN>",
+    "interceptor_pattern": "<INTERCEPTOR_PATTERN>"
+   }
+  ],
+  "cell_m": 30.0,
+  "min_dwell": 2,
+  "steal_examples": [],
+  "steal_views": [],
+  "corruption_views": []
+ }
+}

@@ -1,0 +1,117 @@
+{
+ "_comment": "ENGAGEMENT DAY template — a single-day campaign config for scripts/postprocess_report.py: one engagements[] entry per flight at its best realistic pass (engagement_tab format: summary → Overview (ground tracks + CPA timing) → [Seeker FOV player] → 3-D → top-down → closing distance → closing speed → heading error → track metrics → state table). scripts/quicklook_report.py fills every <PLACEHOLDER> from flights.json + meta.json. Keys starting with '_' are ignored by the code; never put one inside a fixed-length list row (window_pdt pair, ant triple). Numeric placeholders MUST become numbers. Build: cd scripts && micromamba run -n sensorenv python postprocess_report.py <this file>.",
+ "_comment_placeholders": {
+  "<DAY>": "YYYY-MM-DD (day id MUST be a date; all clock strings resolve on it in the campaign <TZ>). AUTO: --day",
+  "<M/D>": "short date for titles/names. AUTO",
+  "<RUN8>": "first 8 hex of the run. AUTO: meta.json run_id8 / run, else flights.json runs[0].run",
+  "<MRU>": "unit number for the sub-line. AUTO: meta.json mru when present",
+  "<N>": "number of engagement tabs. AUTO",
+  "<DUMP_DIR>": "the dump dir that holds THIS flight's window (tracks/track_<TRACK_ID>.csv must exist there; dump_run_window / quickdump / archiver layout). AUTO: the --dumps entry containing the track file and covering the pass",
+  "<INTERCEPTOR_PATTERN>": "interceptor truth glob under <DUMP_DIR>/mavlink/, several compids merged, e.g. mav14551_2_*.csv. AUTO: --interceptor, else derived from the mavlink/ file names (alias-broken 'mavlink_*' files excluded)",
+  "<TARGET_PATTERN>": "target truth csv or glob, e.g. mav14550_1_1.csv / mav*_1_*.csv. AUTO: --target, else flights.json tracking.target + .csv",
+  "<HH:MM:SS>": "LOCAL clock strings in <TZ>. AUTO: window_pdt from flights[].t0_pdt/t1_pdt, cpa_seed_pdt from the chosen passes[].t_pdt",
+  "<TRACK_ID>": "radar track riding the TARGET at the pass. AUTO: flights.json tracking.target_track_spans entry whose span contains the pass (smallest median offset wins), else a scan of <DUMP_DIR>/tracks/",
+  "<HHMMSS>": "cpa_seed_pdt without colons (gif file name). AUTO",
+  "<ANT_LAT>,<ANT_LON>,<ANT_HAE_M>": "THIS day's antenna origin (per deployment — never reuse another day's). AUTO: meta.json 'antenna' / 'antenna_origin_lat_lon_haeM' (or --ant)",
+  "<OUT_ROOT>": "report root. AUTO: --out",
+  "<TZ>": "IANA timezone, e.g. America/Los_Angeles. AUTO: --tz, else the dump meta.json 'tz', else America/Los_Angeles"
+ },
+ "title": "Quick look — <DAY> (engagements)",
+ "sub": "MRU<MRU> · run <RUN8> · quick-look build (auto-filled from flights.json; narratives pending)",
+ "out_root": "<OUT_ROOT>",
+ "server_base": "",
+ "_comment_server_base": "'' = no link rewrite in Rollup_standalone.html; set to http://172.18.1.28:8899/<out_root basename> when served",
+ "tz": "<TZ>",
+ "target_pattern": "<TARGET_PATTERN>",
+ "interceptor_pattern": "<INTERCEPTOR_PATTERN>",
+ "_comment_tz_patterns": "campaign-level timezone and truth-file globs; per-engagement interceptor_pattern / target.pattern override them. Legend ids are derived from the files actually loaded.",
+ "rollup_html": "",
+ "_comment_rollup_html": "NARRATIVE (analyst): the campaign in one arc",
+ "days": [
+  {
+   "_comment": "ONE engagement day. One engagements[] entry per featured pass (quicklook: the best realistic pass of every flight that has one; flights without a realistic pass are skipped with a console note). Every clock string resolves on 'date' in <TZ>. 'ant' is REQUIRED for a new site (AUTO from meta.json). A 'fov' block needs ulog + IR video + zoff + ffmpeg; anything missing skips ONLY the FOV section.",
+   "id": "<DAY>",
+   "title": "<M/D> — Engagements (<N> flights)",
+   "type": "engagement",
+   "sub": "run <RUN8>",
+   "date": "<DAY>",
+   "ant": [
+    "<ANT_LAT>",
+    "<ANT_LON>",
+    "<ANT_HAE_M>"
+   ],
+   "_comment_ant": "three numbers from THIS day's meta.json. AUTO",
+   "overview_html": "",
+   "_comment_overview_html": "OPTIONAL NARRATIVE (analyst): non-empty adds a leading 'Overview' tab with this HTML (day-level story, passes table). '' -> no Overview tab. The per-engagement 'Overview — ground tracks & CPA timing' figure is automatic: it is computed from window_pdt (stars = realistic passes < 75 m, gold = best) — so window_pdt must be the WHOLE flight, not just the pass.",
+   "engagements": [
+    {
+     "name": "<M/D> Flight 1 — pass <N> (<HH:MM:SS> PDT)",
+     "_comment_name": "pane <h3> + 3-D/2-D figure titles; factual (flight, pass number, time). AUTO",
+     "tab_label": "Flight 1",
+     "dump": "<DUMP_DIR>",
+     "interceptor_pattern": "<INTERCEPTOR_PATTERN>",
+     "target": {
+      "pattern": "<TARGET_PATTERN>",
+      "_comment": "alternative when the MAVLink truth froze at the pass: {\"traj_csv\": \"/abs/onboard_gps_traj.csv\"} with columns utc_s,lat,lon,alt_hae_m (replaces 'pattern')"
+     },
+     "window_pdt": [
+      "<HH:MM:SS flight start>",
+      "<HH:MM:SS flight end>"
+     ],
+     "cpa_seed_pdt": "<HH:MM:SS>",
+     "_comment_cpa_seed_pdt": "the pass time from flights.json passes[].t_pdt; eng_plots.cpa refines it within ±20 s (late-born track: ±120 s fallback for the track CPA). AUTO",
+     "track_id": "<TRACK_ID>",
+     "_comment_track_id": "integer; <DUMP_DIR>/tracks/track_<id>.csv must exist. AUTO",
+     "gif": "figs/eng_<TRACK_ID>_<HHMMSS>.gif",
+     "err_pre": 12.0,
+     "err_post": 12.0,
+     "_comment_err_window": "seconds before/after CPA for the 'Track metrics in this window' az/el/range/alt error panels (the CPA replay window itself is the binding t−10…t+5 s and is not configurable)",
+     "summary_html": "<p>Closest approach <b>{cpa_truth:.0f} m truth-truth</b>; <b>{cpa_track:.0f} m</b> to radar track {track_id}.</p>",
+     "_comment_summary_html": "factual default — only {cpa_truth} {cpa_track} {track_id} are substituted (any other {brace} raises KeyError; write literal braces as {{ }}). Analyst: prepend the key message.",
+     "post_html": "",
+     "_comment_post_html": "NARRATIVE (analyst): HTML appended after the pane (steal/corruption notes for this pass)",
+     "_fov_example": {
+      "_comment": "OPTIONAL Seeker FOV player — rename '_fov_example' to 'fov' ONLY when the interceptor ulog + IR video + measured clock offset exist. ffmpeg is resolved from PATH, the interpreter's bin/ (sensorenv) or $SEAWALL_FFMPEG; when missing (and no cached mp4) the FOV section is replaced by an 'unavailable' note and the tab still builds. zoff = flight-controller clock offset (s) from position xcorr vs truth (8/27: 36002.0; 8/28: 36001.3–36001.8). Camera time: EITHER cam{fps,onset_frame} (frame 0 anchored to the ulog takeoff) OR camwarp npz of per-frame capture times.",
+      "ulog": "<WEEK_ROOT>/flight_logs/<day>/Zeus/Logs/LOG00<NN>*.ulg",
+      "zoff": "<ZOFF_S>",
+      "video": "<WEEK_ROOT>/flight_logs/<day>/Zeus/Media/raw_camera_<yyyymmdd>_<hhmmss>.mkv",
+      "cam": {
+       "fps": "<FPS>",
+       "onset_frame": "<ONSET_FRAME>"
+      },
+      "target_label": "<TARGET_ID> truth feed"
+     }
+    }
+   ],
+   "key_message_html": "",
+   "_comment_key_message_html": "NARRATIVE (analyst): rollup card column 2, e.g. '<b>Much better engagements — and track steals</b>: 3 track steals at the crossings'",
+   "numbers_html": "",
+   "_comment_numbers_html": "rollup card column 3, labelled line-per-metric ('Best CPA: <b>21 m</b> (truth-truth)<br>Passes &lt;75 m: 10 of 23<br>Track steals: <b>3</b>'). AUTO from flights.json passes/steal_events — verify before publishing"
+  }
+ ],
+ "_comment_radar_rollup": "OPTIONAL Radar Rollup tab, off in a quick look (absent key = no tab). Rename '_radar_rollup_disabled' to 'radar_rollup' (quicklook: --radar-rollup) to compute az-bias bars, turn statistics and the heat map from the dump dirs; add steal_views/corruption_views only for events with a run id, track id and local time. Target = the LARGEST mavlink csv matching target_pattern.",
+ "_radar_rollup_disabled": {
+  "intro_html": "",
+  "az_bias_html": "",
+  "turns_html": "",
+  "corruption_html": "",
+  "steals_html": "",
+  "heatmap_html": "",
+  "days": [
+   {
+    "label": "<M/D>",
+    "dirs": [
+     "<DUMP_DIR>",
+     "<DUMP_DIR_2>"
+    ],
+    "target_pattern": "<TARGET_PATTERN>",
+    "interceptor_pattern": "<INTERCEPTOR_PATTERN>"
+   }
+  ],
+  "cell_m": 30.0,
+  "min_dwell": 2,
+  "steal_examples": [],
+  "steal_views": [],
+  "corruption_views": []
+ }
+}

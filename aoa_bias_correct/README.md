@@ -28,7 +28,7 @@ micromamba run -n sensorenv python aoa_bias_correct.py --mru 91 --list-runs
 
 # offline: a seawall_archiver CSV dump (no job ids in the archive -> time window)
 micromamba run -n sensorenv python aoa_bias_correct.py \
-    --archive /path/to/seawall_0824_data/2026-08-26/9b22a989 \
+    --archive /home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-26/9b22a989 \
     --t0 "2026-08-26 08:35" --t1 "2026-08-26 08:53" --target 14550
 ```
 
