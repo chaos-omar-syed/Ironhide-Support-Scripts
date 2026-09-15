@@ -13,8 +13,9 @@ Everything runs in the `sensorenv` micromamba environment, which carries the
 `chaotic` package plus numpy, pandas, polars, matplotlib, plotly and pymongo:
 
 ```bash
-JAX_PLATFORMS=cpu micromamba run -n sensorenv python <tool>/<script>.py --help
+micromamba run -n sensorenv python <tool>/<script>.py --help
 ```
 
-`JAX_PLATFORMS=cpu` keeps chaotic's JAX import off the GPU path on workstations
-without one.
+No environment variables are needed. The scripts set `JAX_PLATFORMS=cpu` themselves
+before importing chaotic, so they run the same on a GPU workstation, a field laptop,
+or an MRU box.

@@ -9,24 +9,25 @@ MRU91 azimuth bias −1.45°  →  apply a +1.45° yaw correction
 median horizontal miss 68 m → 25 m
 ```
 
-Single self-contained file. The only dependency is the `sensorenv` environment.
+Single self-contained file. The only dependency is the `sensorenv` environment; no
+environment variables to set (the script pins JAX to CPU itself before importing chaotic).
 
 ## Quick start
 
 ```bash
 # live unit: MRU number, run (hex prefix / friendly name / latest), job ids
-JAX_PLATFORMS=cpu micromamba run -n sensorenv python aoa_bias_correct.py \
+micromamba run -n sensorenv python aoa_bias_correct.py \
     --mru 43 --run 6aecec5e --jobs 21627-23147
 
 # restrict to one MAVLink target when several drones were up
-JAX_PLATFORMS=cpu micromamba run -n sensorenv python aoa_bias_correct.py \
+micromamba run -n sensorenv python aoa_bias_correct.py \
     --mru 91 --run Turquoise_Emu --jobs 2500-2900 --target 14550
 
 # what runs are on a unit
-JAX_PLATFORMS=cpu micromamba run -n sensorenv python aoa_bias_correct.py --mru 91 --list-runs
+micromamba run -n sensorenv python aoa_bias_correct.py --mru 91 --list-runs
 
 # offline: a seawall_archiver CSV dump (no job ids in the archive -> time window)
-JAX_PLATFORMS=cpu micromamba run -n sensorenv python aoa_bias_correct.py \
+micromamba run -n sensorenv python aoa_bias_correct.py \
     --archive /path/to/seawall_0824_data/2026-08-26/9b22a989 \
     --t0 "2026-08-26 08:35" --t1 "2026-08-26 08:53" --target 14550
 ```
