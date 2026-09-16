@@ -137,7 +137,9 @@ def _follow(run: str, row: dict | None = None) -> None:
 
 
 def _run_selected() -> None:
-    _follow(s["_run_w"])
+    run = s.get("_run_w") or s.get("live_run")                          # widget-backed key: gone when the selectbox unmounted (KeyError 2026-09-15)
+    if run:
+        _follow(run)
 
 
 def _connect() -> None:
