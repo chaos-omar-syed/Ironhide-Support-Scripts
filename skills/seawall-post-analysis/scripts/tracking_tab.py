@@ -408,10 +408,6 @@ def en_map(fl, w, colors, rotate_deg=0.0, show_legend=True):
                         line=dict(width=1, color=SURFACE)),
             text=[f"{t:%H:%M:%S}" for t in pdt(mw[:, 0])],
             hovertemplate="%{text}<br>E %{x:.0f} N %{y:.0f}<extra>trk " + str(tid) + "</extra>"))
-    fig.add_trace(go.Scatter(x=[0], y=[0], mode="markers+text", text=["radar"],
-                             textposition="top right", textfont=dict(color=INK2),
-                             marker=dict(symbol="triangle-up", size=12, color=INK),
-                             showlegend=False, hoverinfo="skip"))
     pad = 150
     xr = [Tw[:, 1].min() - pad, Tw[:, 1].max() + pad]
     yr = [Tw[:, 2].min() - pad, Tw[:, 2].max() + pad]
@@ -842,9 +838,6 @@ def maps_fig(fl, w, colors):
                 text=[f"{t:%H:%M:%S}" for t in pdt(mw[:, 0])],
                 hovertemplate="%{text}<br>E %{x:.0f} N %{y:.0f}<extra>trk " +
                               str(tid) + "</extra>"))
-        fig.add_trace(go.Scatter(x=[0], y=[0], mode="markers", xaxis=ax, yaxis=ay,
-                                 marker=dict(symbol="triangle-up", size=11, color=INK),
-                                 showlegend=False, hovertemplate="radar<extra></extra>"))
     fig.update_layout(**LAYOUT,
         xaxis=dict(domain=[0, 0.485], range=xr, title="East (m)", constrain="domain"),
         xaxis2=dict(domain=[0.515, 1], range=xr, title="East (m)", constrain="domain"),

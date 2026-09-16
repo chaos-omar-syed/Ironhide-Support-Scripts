@@ -36,7 +36,7 @@ Outputs land in `aoa_bias_<label>/` (or `--out`):
 
 | File | What it is |
 |---|---|
-| `aoa_bias_simple.png` | Two panels: tracks vs drone GPS **before** and **after** the correction, with the bias and median miss in the title. This is the one to paste in a report. |
+| `aoa_bias_page_all.png`, `aoa_bias_page_trk<ID>.png` | One page per track (plus an all-tracks page): top-down **before / after** on top, azimuth error vs time **before / after** below, thick lines, no radar marker. Each page's title carries that track's own median az error next to the pooled correction, so a badly associated track cannot hide in the pool. `--pages N` caps the per-track pages (longest first, default 12). These are the ones to paste in a report. |
 | `aoa_bias.png` | Six-panel detail: both overlays, horizontal-error histogram, az and el error vs time with the fitted bias and 95% CI, az error vs range. |
 | `aoa_bias.html` | Interactive (plotly) version of the overlays and error series, hover for time stamps. |
 | `summary.json` | Every number: windows, per-job status, correlated pairs, fit statistics, applied rotation, suggested yaw correction, and which correlation engine produced it. |
@@ -154,7 +154,7 @@ correlation           --engine auto|chaotic|geometry   --use-tentative   --rx-no
                       --target SUBSTR   --tracks 1,2,3   --gate 150   --min-dur 10   --keep-adsb
 bias fit              --rmin 300   --min-speed 2   --max-horiz 350   --no-el
                       --alt-units feet|meters   --geoid-n N
-output                --label TEXT   --out DIR
+output                --label TEXT   --out DIR   --pages 12 (per-track pages)
 ```
 
 ## Examples
