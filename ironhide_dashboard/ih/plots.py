@@ -1100,30 +1100,51 @@ def _now_pair(e: dict, key: str, t_now: float, t_lo: float):
     return float(y[i]), (float(sg[i]) if len(sg) == len(t) and np.isfinite(sg[i]) else None)
 
 
-def readout(e: dict, key: str, t_now: float, t_lo: float) -> str:
-    """Primary takeaway for one panel: the CURRENT graded error and its 1σ at the newest graded
-    sample in the window — "now +0.8° ± 1.1° (1σ)"; "last 7 s ago …" when that sample is older
-    than NOW_MAX_AGE_S; "no sample" when the window holds none."""
-    t = np.asarray(e.get("t", ()), float)
-    y = np.asarray(e.get(key, ()), float)
-    sg = np.asarray(e.get(f"sig_{key}", ()), float)
-    if not (len(t) == len(y) and len(t)):
-        return "no sample"
-    if len(sg) != len(t):
-        sg = np.full(len(t), np.nan)
+COAST_WORDS = {"coast": "coasting", "tent": "tentative"}          # readout prefix when the newest published state was not a measurement update
+
+
+def newest_sample(e: dict | None, key: str, t_now: float, t_lo: float, default_kind: str = "meas"):
+    """(t, value, σ or None, kind) of the newest finite sample of ``key`` inside the window of one errors dict
+    (graded or ungraded layout), or None.  kind = the row's published kind ("meas" / "coast" / "tent"), else
+    ``default_kind`` ("meas" for a graded dict without a per-row kind; the callers pass "coast" for the ungraded one)."""
+    if not e:
+        return None
+    t = np.asarray(e.get("t", ()), float); y = np.asarray(e.get(key, ()), float); sg = np.asarray(e.get(f"sig_{key}", ()), float)
+    if not (len(t) and len(y) == len(t)):
+        return None
     ok = np.flatnonzero((t >= t_lo) & np.isfinite(y))
     if not len(ok):
-        return "no sample"
+        return None
     i = int(ok[-1])
-    has_sig = bool(np.isfinite(sg[i]) and sg[i] > 0)
+    s = float(sg[i]) if len(sg) == len(t) and np.isfinite(sg[i]) and sg[i] > 0 else None
+    k = e.get("kind", ())
+    kind = str(k[i]) if len(k) == len(t) else default_kind
+    return float(t[i]), float(y[i]), s, kind
+
+
+def readout(e: dict, key: str, t_now: float, t_lo: float, u: dict | None = None) -> str:
+    """Primary takeaway for one panel: the CURRENT error and its 1σ at the track's NEWEST published state in the
+    window — "now +0.8° ± 1.1° (1σ)".  2026-09-15 user ("the track should be propagated"): while the track COASTS
+    the newest state is an ungraded one (``u`` = the ungraded companion dict) and its propagated error vs truth IS
+    the current error — "coasting · now +0.4° ± 1.1° (1σ)" (σ from the coast covariance, "σ n/a" without one),
+    never a stale graded value and never "no sample" while the track publishes.  "last 7 s ago …" only when the
+    newest state of either kind is older than NOW_MAX_AGE_S; "no sample" when the window holds none."""
+    g, ug = newest_sample(e, key, t_now, t_lo), newest_sample(u, key, t_now, t_lo, "coast")
+    cur = ug if (ug is not None and (g is None or ug[0] > g[0])) else g
+    if cur is None:
+        return "no sample"
+    t_i, y_i, s_i, kind = cur
+    has_sig = s_i is not None
     if key in ONE_SIDED:   # "now 46 m · σ 31 m" (the error is a magnitude; σ = 1σ radius of the covariance ellipsoid)
-        body = f"{ERR_NUM[key].format(y[i])}{ERR_UNIT[key]} · σ " + (f"{ERR_SIG_NUM[key].format(sg[i])}{ERR_UNIT[key]}" if has_sig else "n/a")
+        body = f"{ERR_NUM[key].format(y_i)}{ERR_UNIT[key]} · σ " + (f"{ERR_SIG_NUM[key].format(s_i)}{ERR_UNIT[key]}" if has_sig else "n/a")
     elif has_sig:
-        body = f"{ERR_NUM[key].format(y[i])}{ERR_UNIT[key]} ± {ERR_SIG_NUM[key].format(sg[i])}{ERR_UNIT[key]} (1σ)"
-    else:   # graded error without a usable covariance (missing p_cov): never a fake "± 0"
-        body = f"{ERR_NUM[key].format(y[i])}{ERR_UNIT[key]} · σ n/a"
-    age = float(t_now) - float(t[i])
-    return f"now {body}" if age <= NOW_MAX_AGE_S else f"last {age:.0f} s ago {body}"
+        body = f"{ERR_NUM[key].format(y_i)}{ERR_UNIT[key]} ± {ERR_SIG_NUM[key].format(s_i)}{ERR_UNIT[key]} (1σ)"
+    else:   # error without a usable covariance (missing p_cov): never a fake "± 0"
+        body = f"{ERR_NUM[key].format(y_i)}{ERR_UNIT[key]} · σ n/a"
+    word = COAST_WORDS.get(kind)
+    lead = f"{word} · " if word else ""
+    age = float(t_now) - t_i
+    return lead + (f"now {body}" if age <= NOW_MAX_AGE_S else f"last {age:.0f} s ago {body}")
 
 
 def err_strip_px(readout_px: int, sub_px: int) -> tuple[int, int]:
@@ -1265,11 +1286,15 @@ def error_fig(A: dict, P: dict, window_s: float = 120.0) -> go.Figure:
             e, col, name = tr["errors"], TRACK_COLORS[min(i, len(TRACK_COLORS) - 1)], f"track #{tr['tid']}"
             m = e["t"] >= t_lo
             t, y, sg = e["t"][m], np.asarray(e[key], float)[m], np.asarray(e[f"sig_{key}"], float)[m]
-            ok = np.isfinite(y) & np.isfinite(sg)
+            kg = np.asarray(e.get("kind", ()), object)
+            # the RANGE statistics take measurement-updated rows only: a coasting state's growing error / σ (the legacy grader keeps
+            # coast rows inside e, tagged by kind; spa's are in the ungraded dict) is drawn but never blows the held range
+            meas = (kg[m] == "meas") if len(kg) == len(e["t"]) else np.ones(len(t), bool)
+            ok = np.isfinite(y) & np.isfinite(sg) & meas
             if ok.any():
                 mag_all[key].append(np.abs(y[ok]) + sg[ok])
                 sig_all[key].append(sg[ok])
-            fy = np.isfinite(y) & ~ok
+            fy = np.isfinite(y) & ~np.isfinite(sg) & meas
             if fy.any():
                 mag_all[key].append(np.abs(y[fy]))
             # the published states spa did NOT grade (tentative / coasting / extrapolated): they BRIDGE the holes in the graded line
@@ -1352,7 +1377,7 @@ def error_fig(A: dict, P: dict, window_s: float = 120.0) -> go.Figure:
                            text=f"<b>{ERR_TITLE[key]}</b> ({ERR_UNIT[key].strip()})" + (f"  <b>▲ {words}</b>" if words else ""), showarrow=False,
                            font=dict(family=T.MONO, size=title_px, color=T.INK),   # PRIMARY ink, bold: "still very hard to make out what each one is"; the amber lives on the card frame
                            bgcolor=TAG_BG, borderpad=1, name=f"title_{key}", row=r, col=1)
-        txt = readout(primary, key, t_now, t_lo)
+        txt = readout(primary, key, t_now, t_lo, tracks[0].get("ungraded") if tracks else None)   # the newest published state, coasting included
         empty = txt == "no sample"
         empty_txt = NO_TGT_READOUT if no_tgt_truth(A) else EMPTY_READOUT      # nothing to grade AGAINST vs nothing graded YET
         # EMPTY STATE: the card still carries its title and a muted "no graded samples yet" readout (never a blank box)
@@ -1486,24 +1511,22 @@ def vel_readout_short(tk_now: float | None, tr_now: float | None, d_now: float |
     return f"trk {f(tk_now)} · tru {f(tr_now)} · Δ {f(d_now)}"
 
 
-def vel_delta_text(e: dict, key: str, t_now: float, t_lo: float, c: dict | None) -> str:
-    """Line 2: spa's grading — 'Δ +0.8 · σ 0.9 m/s · 1σ 67% · n 118' (σ n/a and no rates when the source had no velocity covariance)."""
-    t = np.asarray(e.get("t", ()), float)
-    y = np.asarray(e.get(key, ()), float)
-    sg = np.asarray(e.get(f"sig_{key}", ()), float)
-    if not (len(t) and len(y) == len(t)):
+def vel_delta_text(e: dict, key: str, t_now: float, t_lo: float, c: dict | None, u: dict | None = None) -> str:
+    """Line 2: spa's grading at the track's NEWEST published state — 'Δ +0.8 · σ 0.9 m/s · 1σ 67% · n 118' (σ n/a and no rates
+    when the source had no velocity covariance); 'coasting · Δ …' when that state is a coasting / tentative one (``u`` = the
+    ungraded companion dict: the filtered velocity exists during a coast and its Δ vs truth is a real number); 'last 7 s ago · …'
+    only when the newest state of either kind is older than NOW_MAX_AGE_S."""
+    g, ug = newest_sample(e, key, t_now, t_lo), newest_sample(u, key, t_now, t_lo, "coast")
+    cur = ug if (ug is not None and (g is None or ug[0] > g[0])) else g
+    if cur is None:
         return "no samples"
-    if len(sg) != len(t):
-        sg = np.full(len(t), np.nan)
-    ok = np.flatnonzero((t >= t_lo) & np.isfinite(y))
-    if not len(ok):
-        return "no samples"
-    i = int(ok[-1])
-    d = f"Δ {y[i]:+.1f}"
-    sig = f" · σ {sg[i]:.1f} m/s" if np.isfinite(sg[i]) and sg[i] > 0 else " m/s · σ n/a"
+    t_i, y_i, s_i, kind = cur
+    d = f"Δ {y_i:+.1f}"
+    sig = f" · σ {s_i:.1f} m/s" if s_i is not None else " m/s · σ n/a"
     rates = f" · 1σ {c['p1']:.0f}% · n {c['n']}" if c and c.get("n") else ""
-    age = float(t_now) - float(t[i])
-    lead = "" if age <= NOW_MAX_AGE_S else f"last {age:.0f} s ago · "
+    word = COAST_WORDS.get(kind)
+    age = float(t_now) - t_i
+    lead = (f"{word} · " if word else "") + ("" if age <= NOW_MAX_AGE_S else f"last {age:.0f} s ago · ")
     return lead + d + sig + rates
 
 
@@ -1574,7 +1597,9 @@ def velocity_fig(A: dict, P: dict, window_s: float = 120.0, truth: np.ndarray | 
             kind = np.array(["tent" if st_ == 1 else ("meas" if (tt - lu) < D.MEAS_LAG_S else "coast") for tt, lu, st_ in zip(t, tkw[:, 7], tkw[:, 9])], object)
             fin = np.isfinite(y)
             if fin.any():
-                lo_v.append(float(np.nanmin(y))); hi_v.append(float(np.nanmax(y)))
+                fm = fin & (kind == "meas")                                 # the range statistic: measurement-updated rows (a coasting
+                yr = y[fm] if fm.any() else y[fin]                          # state is drawn but never widens the held range; all-coast window -> its rows)
+                lo_v.append(float(np.nanmin(yr))); hi_v.append(float(np.nanmax(yr)))
                 ends["track"] = (float(t[fin][-1]), float(y[fin][-1]))
             # spa's σ for this component at the graded sample times (NaN elsewhere / when the source had no velocity covariance)
             sg = np.full(len(t), np.nan)
@@ -1600,8 +1625,10 @@ def velocity_fig(A: dict, P: dict, window_s: float = 120.0, truth: np.ndarray | 
             # ±1σ band around the FILTERED STATE where spa had a real velocity σ (one polygon per run without breaks)
             sg = fill_sigma(t, sg)                                            # bands continuous across tentative / coasting rows
             okb = np.isfinite(sg) & np.isfinite(y)
+            okr = okb & graded                                                # the band's range contribution: graded rows only
+            if okr.any():
+                lo_v.append(float(np.nanmin((y - sg)[okr]))); hi_v.append(float(np.nanmax((y + sg)[okr])))
             if okb.any():
-                lo_v.append(float(np.nanmin((y - sg)[okb]))); hi_v.append(float(np.nanmax((y + sg)[okb])))
                 for k in BANDS_DRAWN:
                     for i0, i1 in _runs_of(okb, brk):
                         if i1 - i0 + 1 < 2:
@@ -1677,7 +1704,7 @@ def velocity_fig(A: dict, P: dict, window_s: float = 120.0, truth: np.ndarray | 
         c = contain.get(key)
         # SIDE-BY-SIDE cards (two-column strip, ~300 px wide): one short line 2 replaces the long readout + Δ line — the panel JS
         # (cardGrid) shows readout_<key>_s and hides readout_<key> / delta_<key> when the cards sit in columns, and back when stacked
-        d_txt = vel_delta_text(e, key, t_now, t_lo, c)
+        d_txt = vel_delta_text(e, key, t_now, t_lo, c, u)   # the newest published state, coasting included
         # ~250-310 px cards: "trk <b>+9.8</b> · tru <b>+13.0</b> · Δ <b>−2.9</b>" (no unit / σ / rates — the stacked layout carries them) at the
         # primary readout size capped at VEL_SHORT_MAX_PX (the line must stay inside the narrow card)
         # SIDE-BY-SIDE strip = ONE row (user 2026-09-15 "why are there still 2 rows?"): short title left, the numbers right, both on the top line

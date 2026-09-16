@@ -391,3 +391,66 @@ def test_bare_mode_07_23_52_labels_widths_ranges():
     truth = [t for t in fv.data if t.name == "MAVLink truth"]
     assert truth and all(t.line.width == 3 and t.line.color == T.TARGET for t in truth)
     assert not _ann(fv, "endlbl_truth_vn") and not _ann(fv, "endlbl_track_vn")   # end words off
+
+
+# ── 2026-09-15 user: "why do all plots go blank during a coast? the track should be propagated" ──
+def _coast_split(n_c: int = 10, coast_az: float = 4.5):
+    """Graded rows up to T_NOW − n_c, then n_c ungraded COASTING rows (propagated states, growing σ) to T_NOW.
+    coast_az = a large propagated error: drawn, but it must never widen the held range."""
+    e = _errors(n=int(WIN) - n_c)                                        # t = T_NOW−119 … T_NOW−n_c
+    e["kind"] = np.full(len(e["t"]), "meas", object)
+    tc = T_NOW - n_c + 1.0 + np.arange(n_c, dtype=float)
+    u = {"t": tc, "az": np.full(n_c, coast_az), "el": np.full(n_c, 0.2), "pos3d": np.full(n_c, 60.0), "alt": np.full(n_c, 8.0),
+         "sig_az": 1.1 + 0.05 * np.arange(n_c), "sig_el": np.full(n_c, np.nan), "sig_pos3d": np.full(n_c, 40.0), "sig_alt": np.full(n_c, 30.0),
+         "kind": np.full(n_c, "coast", object), "vn": np.full(n_c, 0.8), "sig_vn": np.full(n_c, np.nan)}
+    return e, u
+
+
+def test_coast_keeps_the_cards_populated():
+    e, u = _coast_split()
+    A = {"t_now": T_NOW, "err_tracks": [{"tid": 177, "errors": e, "ungraded": u}], "contain": {"az": {"n": 110, "p1": 70.0, "p3": 100.0}},
+         "track_events": [], "cpa": None}
+    fig = PL.error_fig(A, P_ERR, WIN)
+    (ro,) = _ann(fig, "readout_az")
+    assert ro["text"].startswith("coasting · now +4.5° ± 1.6° (1σ)") and ro["font"]["color"] == T.INK    # the CURRENT propagated error, σ from the coast covariance, ink
+    (ro_el,) = _ann(fig, "readout_el")
+    assert ro_el["text"] == "coasting · now +0.2° · σ n/a"                                                 # no coast covariance -> "σ n/a", never "no samples"
+    light = [t for t in fig.data if t.name == "track #177" and t.yaxis == "y"]
+    solid = [t for t in fig.data if t.name == "track #177 matched" and t.yaxis == "y"]
+    assert len(light) == 1 and len(solid) == 1
+    newest = lambda tr: max(_ts(x) for x, y in zip(tr.x, tr.y) if x is not None and y is not None and np.isfinite(y))   # noqa: E731
+    assert newest(light[0]) == _ts(D.to_pdt_dt64(np.array([T_NOW]))[0])                                   # the lighter line runs through the coast to now
+    assert newest(solid[0]) == _ts(D.to_pdt_dt64(np.array([T_NOW - 10.0]))[0])                            # the matched line stops at the last graded row
+    assert any(str(t.name).startswith("coast strip") for t in fig.data)
+    # the range is HELD: the +4.5° coast error is drawn but the az range is the one the graded rows alone give
+    A0 = {"t_now": T_NOW, "err_tracks": [{"tid": 177, "errors": e, "ungraded": {"t": np.zeros(0)}}], "contain": {}, "track_events": [], "cpa": None}
+    assert _L(fig)["yaxis"]["range"] == _L(PL.error_fig(A0, P_ERR, WIN))["yaxis"]["range"]
+    (ro0,) = _ann(PL.error_fig(A0, P_ERR, WIN), "readout_az")
+    assert ro0["text"].startswith("last 10 s ago ")                                                        # without the propagated rows the graded value is honestly stale
+    # velocity line 2: the same rule
+    assert PL.vel_delta_text(e | {"vn": np.zeros(len(e["t"])), "sig_vn": np.full(len(e["t"]), 0.9)}, "vn", T_NOW, T_NOW - WIN, None, u) == "coasting · Δ +0.8 m/s · σ n/a"
+    # a track with NO row for > 3 s is dropped: the readout goes dark
+    late = {k: (v[:-8] if hasattr(v, "__len__") else v) for k, v in u.items()}
+    assert PL.readout(e, "az", T_NOW, T_NOW - WIN, late).startswith("coasting · last 8 s ago ")
+    assert PL.readout({"t": np.zeros(0)}, "az", T_NOW, T_NOW - WIN, {"t": np.zeros(0)}) == "no sample"
+
+
+def test_engine_coast_hold_keeps_the_previous_track_until_it_drops_or_measures_elsewhere():
+    import ih.engine as E
+    t = T_NOW - 30.0 + np.arange(31, dtype=float)
+    Tt = np.zeros((len(t), 7)); Tt[:, 0] = t; Tt[:, 1] = 1000.0; Tt[:, 2] = 500.0; Tt[:, 3] = 100.0        # target truth: hovering
+    Ti = Tt.copy(); Ti[:, 1] = 9000.0                                                                       # interceptor truth far away
+    tk = np.full((len(t), D.TK_W), np.nan); tk[:, 0] = t; tk[:, 3] = 100.0; tk[:, 4:7] = 30.0; tk[:, 8] = 1; tk[:, 9] = 2; tk[:, 10:13] = 0.0
+    tk[:, 1] = 1020.0; tk[:, 2] = 500.0; tk[:, 7] = t                                                       # measured 20 m off the truth ...
+    coast = t >= T_NOW - 12.0
+    tk[coast, 7] = T_NOW - 13.0                                                                             # ... then 12 s of COASTING states ...
+    tk[coast, 1] = 1020.0 + 40.0 * (t[coast] - (T_NOW - 13.0))                                              # ... drifting 40 m/s: 500 m off at now
+    tracks = {177: tk}
+    sel = E.select_tracks(tracks, Tt, Ti, T_NOW, prev_tgt=177)
+    assert sel["tgt_tid"] == 177 and sel["tgt_rule"] == E.COAST_HOLD_RULE and sel["scores"][177] > D.GATE_M    # held through the coast
+    assert E.select_tracks(tracks, Tt, Ti, T_NOW, prev_tgt=None)["tgt_tid"] is None                          # never a fresh pick beyond the gate
+    tk2 = tk.copy(); tk2[-1, 7] = tk2[-1, 0] - 0.5                                                          # the newest state is a MEASUREMENT 500 m off: a steal
+    assert E.select_tracks({177: tk2}, Tt, Ti, T_NOW, prev_tgt=177)["tgt_tid"] is None
+    assert E.select_tracks(tracks, Tt, Ti, T_NOW + 4.0, prev_tgt=177)["tgt_tid"] is None                    # no state for > 3 s: dropped -> dark
+    near = tk.copy(); near[:, 1] = 1010.0; near[:, 7] = t                                                   # an in-gate track appears: it wins (allowed track switch)
+    assert E.select_tracks({177: tk, 178: near}, Tt, Ti, T_NOW, prev_tgt=177)["tgt_tid"] == 178

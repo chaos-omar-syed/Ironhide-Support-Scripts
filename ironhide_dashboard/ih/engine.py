@@ -201,6 +201,22 @@ HYST_BONUS_M = 1.0e3         # joint-cost bonus of the previous tick's track ins
 HYST_FACTOR, HYST_PAD_M = 1.5, 20.0   # hysteresis band: keep prev while d_prev < gate and d_prev <= HYST_FACTOR · d_best + HYST_PAD_M
 OTHER_ROLE_PENALTY_M = 0.5 * D.GATE_M  # MAVLink match pointing at the OTHER role: still a position-gate candidate here (beats an empty role) but any null-match track up to this much farther wins
 NO_TRACK_RULE = "no track in gate"
+COAST_HOLD_RULE = "coasting hold"     # the previous tick's track kept while its newest state is a COASTING one, even beyond the gate
+COAST_HOLD_EPS_M = 1e-3               # its joint cost: just under the "none" cost (= gate) — every in-gate candidate beats it, an empty role never does
+
+
+def coasting_now(tracks: dict, tid, t_now: float, max_age: float = 3.0) -> bool:
+    """True when track ``tid`` still publishes (newest state within ``max_age``) and that newest state is a COASTING one
+    (published without a measurement): the tracker is propagating it.  2026-09-15 user: "why do all plots go blank during a
+    coast? the track should be propagated … never go dark unless we drop the track or at the start of a track switch" — a
+    propagated state drifting past the position gate must not un-select the track (role_candidates ``hold``); a MEASUREMENT
+    state beyond the gate (a steal / another object) still does, and a track that stops publishing is dropped."""
+    if tid is None or tid not in tracks:
+        return False
+    a = np.asarray(tracks[tid], float)
+    if not len(a) or float(t_now) - float(a[-1, 0]) > float(max_age):
+        return False
+    return str(state_kind(a[-1:])[0]) == "coast"
 
 
 def is_mavlink_id(mid) -> bool:
@@ -272,7 +288,7 @@ def excluded_rule(mid) -> str:
     return f"excluded ADS-B {mid}"
 
 
-def role_candidates(scores: dict, meta: dict | None, role: str, role_ids: dict, prev, gate: float = D.GATE_M) -> tuple[list[dict], list[dict]]:
+def role_candidates(scores: dict, meta: dict | None, role: str, role_ids: dict, prev, gate: float = D.GATE_M, hold: bool = False) -> tuple[list[dict], list[dict]]:
     """One role's candidates from its side_scores {tid: d}: ([{tid, d, prio, conf, sticky, cost}] sorted by cost, top
     CAND_TOP_N; [{tid, match_id, conf, d}] EXCLUDED tracks — non-MAVLink radar match).  Tier by the radar's truth
     match: id in this role's list -> PRIORITY (d < MATCH_GATE_FACTOR·gate, cost d − PRIORITY_BONUS_M); no match ->
@@ -298,6 +314,13 @@ def role_candidates(scores: dict, meta: dict | None, role: str, role_ids: dict, 
             if c["tid"] == int(prev) and c["d"] < gate and c["d"] <= HYST_FACTOR * best + HYST_PAD_M:
                 c["sticky"] = True
                 c["cost"] -= HYST_BONUS_M
+    # COAST HOLD (coasting_now): the previous track's propagated state has drifted past the gate -> it stays a candidate at a cost just
+    # under "none": any in-gate track wins (a re-acquisition / handover = the allowed dark moment), an empty role never does
+    if hold and prev is not None and int(prev) in scores and not any(c["tid"] == int(prev) for c in cands):
+        mid, conf = track_match(meta, int(prev))
+        if match_role(mid, role_ids) != "other":
+            cands.append({"tid": int(prev), "d": float(scores[int(prev)]), "prio": False, "conf": conf, "sticky": True, "other_role": False,
+                          "hold": True, "cost": float(gate) - COAST_HOLD_EPS_M})
     cands.sort(key=lambda c: (c["cost"], c["tid"]))
     return cands[:CAND_TOP_N], excluded
 
@@ -320,6 +343,8 @@ def joint_assign(tc: list[dict], ic: list[dict], gate: float = D.GATE_M) -> tupl
 
 def _pick_rule(chosen: dict | None, cands: list[dict], excluded: list[dict], gate: float) -> str:
     if chosen is not None:
+        if chosen.get("hold"):
+            return COAST_HOLD_RULE
         if chosen["prio"]:
             return match_rule(chosen["conf"])
         if chosen["sticky"] and any(c["tid"] != chosen["tid"] and c["d"] < chosen["d"] for c in cands):
@@ -339,7 +364,9 @@ def select_tracks(tracks: dict, Tt, Ti, t_now: float, prev_tgt=None, prev_itc=No
     ``meta`` = snap["track_meta"] (absent -> every track is a null match -> position gate only)."""
     role_ids = role_ids or {"target": [], "interceptor": []}
     ts, is_ = side_scores(tracks, Tt, t_now), side_scores(tracks, Ti, t_now)
-    tc, tex = role_candidates(ts, meta, "target", role_ids, prev_tgt, gate)
+    # the coast hold is the TARGET's (its metrics cards are what must not go dark); the interceptor track is display-only and keeps
+    # the plain gate (8/28 F1 07:22:07: the coasting-away #129 leaves the interceptor role as before)
+    tc, tex = role_candidates(ts, meta, "target", role_ids, prev_tgt, gate, hold=coasting_now(tracks, prev_tgt, t_now))
     ic, iex = role_candidates(is_, meta, "interceptor", role_ids, prev_itc, gate)
     a, b = joint_assign(tc, ic, gate)
     ex: dict[int, dict] = {}
@@ -461,7 +488,7 @@ def _legacy_track_errors(a: np.ndarray, T: np.ndarray) -> dict:
         "pos3d": np.sqrt((a[:, TK["E"]] - tr[:, 0]) ** 2 + (a[:, TK["N"]] - tr[:, 1]) ** 2 + (a[:, TK["U"]] - tr[:, 2]) ** 2),
         "sig_pos3d": np.sqrt(a[:, TK["sE"]] ** 2 + a[:, TK["sN"]] ** 2 + a[:, TK["sU"]] ** 2),
         "horiz": np.hypot(a[:, TK["E"]] - tr[:, 0], a[:, TK["N"]] - tr[:, 1]), "kind": state_kind(a),
-        "n_graded": int(np.isfinite(az_k - az_t).sum()), "n_rows": int(len(a)), "grader": "legacy",
+        "n_graded": int((np.isfinite(az_k - az_t) & (state_kind(a) == "meas")).sum()), "n_rows": int(len(a)), "grader": "legacy",   # spa semantics: coast / tentative rows are published, not graded
         # velocity states are spa's grading only: the legacy fallback carries them as NaN (same length as t)
         **{k: np.full(len(a), np.nan) for k in (*VEL_KEYS, "sig_ve", "sig_vn", "sig_vu")},
     })
