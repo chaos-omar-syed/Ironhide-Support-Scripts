@@ -618,12 +618,9 @@ if D.is_live():                                                     # LIVE: prim
     with c_save:
         # D.goto_save flags ds_mode=live + save_focus + _goto_save; the ENTRY script (app.py) switches to the Data-source page before this
         # page would rerun, so the body below only runs when this page is served standalone (AppTest)
-        if st.button("Save data to archive…", type="primary", key="save_jump", on_click=D.goto_save, width="stretch",
-                     help="Save a time range of this run (MAVLink + tracks + obs) as a replayable archive flight — opens the save card on the Data source page."):
-            try:
-                st.switch_page("views/3_data_source.py")
-            except Exception:                                       # standalone page (no st.navigation): the state flags are enough
-                pass
+        st.button("Save data to archive…", type="primary", key="save_jump", on_click=D.goto_save, width="stretch",
+                  help="Save a time range of this run (MAVLink + tracks + obs) as a replayable archive flight — opens the save card on the Data source page.")
+        # (no st.switch_page here: D.goto_save sets the flags and the ENTRY script switches pages on the next run — 2026-09-15 "crashed out")
 # 2026-09-15: the legend was 5 lines (Normal) / 6 lines (Large) of a 682 px laptop viewport.  Kept: the gold-star/CPA rule and
 # the track-state key — neither is written anywhere else.  Dropped: what the plots already label themselves (±1σ band, 3D POS =
 # 1σ radius, crosses = raw obs, the error-sample provenance note, the panel port).

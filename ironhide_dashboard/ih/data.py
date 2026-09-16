@@ -645,16 +645,24 @@ def archive_bundle(flight: int, roles: tuple | None = None) -> dict:
     feeds = {"target": [], "interceptor": []}
     raw = []
     ant = (ANT_LAT, ANT_LON, ANT_HAE)
+    saved_roles = {}
     try:
         with open(os.path.join(d, "meta.json")) as f:
-            a = json.load(f).get("antenna")
+            mj = json.load(f)
+        a = mj.get("antenna")
         if a and len(a) >= 3:
             ant = (float(a[0]), float(a[1]), float(a[2]))
+        for r_, ids_ in (mj.get("roles") or {}).items():                  # the mapping the flight was SAVED with (2026-09-15: the replay
+            for i_ in ids_ or ():                                          # of a 9/15 flight called the target the interceptor — the un-aliased
+                saved_roles[str(i_)] = r_                                  # id "mavlink_2_*" matched the interceptor pattern)
     except Exception:
         pass
+    explicit = set((roles[0] if roles else ()) or ()) | set((roles[1] if roles else ()) or ())
     for f in sorted(glob.glob(os.path.join(d, "mavlink", "*.csv"))):
         name = os.path.splitext(os.path.basename(f))[0]
-        role = role_of(name, roles)
+        role = role_of(name, roles) if (name in explicit or name not in saved_roles) else saved_roles[name]   # explicit > saved > patterns
+        if role not in ("target", "interceptor"):
+            role = "interceptor"
         df = pl.read_csv(f, infer_schema_length=100000)
         if df.is_empty() or not set(TRUTH_COLS) <= set(df.columns):
             continue
