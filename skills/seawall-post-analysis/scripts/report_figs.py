@@ -139,10 +139,6 @@ def maps_fig(ctx):
                 text=[f"{t:%H:%M:%S}" for t in ctx.pt(mw[:, 0])],
                 hovertemplate="%{text}<br>E %{x:.0f} N %{y:.0f}<extra>trk " +
                               str(tid) + "</extra>"))
-        fig.add_trace(go.Scatter(x=[0], y=[0], mode="markers", xaxis=ax, yaxis=ay,
-                                 marker=dict(symbol="triangle-up", size=11, color=INK),
-                                 showlegend=False,
-                                 hovertemplate="radar<extra></extra>"))
     fig.update_layout(**LAYOUT,
         xaxis=dict(domain=[0, 0.485], range=xr, title="East (m)", constrain="domain"),
         xaxis2=dict(domain=[0.515, 1], range=xr, title="East (m)", constrain="domain"),

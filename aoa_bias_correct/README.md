@@ -28,15 +28,27 @@ micromamba run -n sensorenv python aoa_bias_correct.py --mru 91 --list-runs
 
 # offline: a seawall_archiver CSV dump (no job ids in the archive -> time window)
 micromamba run -n sensorenv python aoa_bias_correct.py \
-    --archive /home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-26/9b22a989 \
+    --archive <week>/2026-08-26/9b22a989 \
     --t0 "2026-08-26 08:35" --t1 "2026-08-26 08:53" --target 14550
+
+# offline: a dashboard "Save to archive" dump (same layout, meta key 'antenna'),
+# fit on ONE track after the per-track pages showed the other one was mis-associated
+micromamba run -n sensorenv python aoa_bias_correct.py \
+    --archive <week>/2026-09-15/ce98ea94_Flight_1 \
+    --t0 "2026-09-15 16:50" --t1 "2026-09-15 17:01" --target mavlink_2_1 --tracks 2613 \
+    --label "MRU91 9/15 Flight 1 (run ce98ea94)" --out reports/aoa_0915
 ```
+
+Any archive in the quickdump layout works (`mavlink/*.csv`, `tracks/*.csv`,
+`meta.json`): `dump_run_window.py` output, the dashboard's saved flights, the
+old quickdumps and the seawall_archiver dumps. `--target` is a substring of the
+MAVLink id as the radar published it (`14550`, `mavlink_2_1`, …).
 
 Outputs land in `aoa_bias_<label>/` (or `--out`):
 
 | File | What it is |
 |---|---|
-| `aoa_bias_simple.png` | Two panels: tracks vs drone GPS **before** and **after** the correction, with the bias and median miss in the title. This is the one to paste in a report. |
+| `aoa_bias_page_all.png`, `aoa_bias_page_trk<ID>.png` | One page per track (plus an all-tracks page): top-down **before / after** on top, azimuth error vs time **before / after** below, thick lines, no radar marker. Each page's title carries that track's own median az error next to the pooled correction, so a badly associated track cannot hide in the pool. `--pages N` caps the per-track pages (longest first, default 12). These are the ones to paste in a report. |
 | `aoa_bias.png` | Six-panel detail: both overlays, horizontal-error histogram, az and el error vs time with the fitted bias and 95% CI, az error vs range. |
 | `aoa_bias.html` | Interactive (plotly) version of the overlays and error series, hover for time stamps. |
 | `summary.json` | Every number: windows, per-job status, correlated pairs, fit statistics, applied rotation, suggested yaw correction, and which correlation engine produced it. |
@@ -52,6 +64,30 @@ The console prints the same summary:
   horiz err median  raw 70 m  ->  corrected 28 m   (p90 119 -> 51)
   suggested yaw_offset correction: +1.46° (sign: see notes in summary.json)
 ```
+
+## Reading the per-track pages
+
+![8/26 flight 1, track 94](examples/MRU91_9b22a989_flight1/aoa_bias_page_trk94.png)
+
+Top row: track (thick) over the drone GPS path, **before** and **after** the
+pooled correction. Bottom row: azimuth error versus time, same y-scale on both
+sides so the shift is visible; dashed line = that track's median.
+
+How to read them:
+
+1. **Look at every track's own median first** (page title). A real array yaw
+   error shows the same number on every track and a range-flat error trace.
+2. **If one track disagrees, drop it and refit** with `--tracks`. On 9/15 the
+   pooled +0.80° came from a mis-associated first track (+3.4°, 155 m miss)
+   riding next to a good one (+0.28°, 27 m). Applying the pooled number made
+   the good track worse (27 → 31 m); the refit on the good track alone is the
+   radar's real residual (`examples/MRU91_ce98ea94_0915_trk2613/`).
+3. **Only act on it when it is range-flat and consistent** (`slope vs range`
+   near 0, `per-track spread` small) and above the 1° reporting bar. +0.28° is
+   noise; −1.46° on 8/26 was the yaw error that the cal geometry confirmed.
+4. **Elevation** almost always reads +0.3…0.5° (≡ +15…20 m): that is the tracker
+   altitude floor, not an AoA error, and it is not applied when the track
+   altitude is pinned.
 
 ## How it works
 
@@ -154,7 +190,7 @@ correlation           --engine auto|chaotic|geometry   --use-tentative   --rx-no
                       --target SUBSTR   --tracks 1,2,3   --gate 150   --min-dur 10   --keep-adsb
 bias fit              --rmin 300   --min-speed 2   --max-horiz 350   --no-el
                       --alt-units feet|meters   --geoid-n N
-output                --label TEXT   --out DIR
+output                --label TEXT   --out DIR   --pages 12 (per-track pages)
 ```
 
 ## Examples
@@ -166,6 +202,7 @@ output                --label TEXT   --out DIR
 | `MRU91_9b22a989_flight1` | geometry fallback (CSV archive) | −1.46° | 70 m → 28 m |
 | `MRU91_9b22a989_flight2` | geometry fallback (CSV archive) | −1.44° | 66 m → 22 m |
 | `MRU43_6aecec5e_jobs21627-23147` | chaotic obs-history plurality | −4.44° | 202 m → 83 m |
+| `MRU91_ce98ea94_0915_trk2613` | geometry fallback (dashboard archive), one track | +0.28° | 27 m → 24 m (no correction warranted) |
 
 The MRU91 result is range-flat and agrees across both flights: a real array
 rotation. The MRU43 case is an uncontrolled flight whose az error slopes with

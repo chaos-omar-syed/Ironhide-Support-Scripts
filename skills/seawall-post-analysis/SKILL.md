@@ -126,7 +126,7 @@ Run what the day type calls for; every number in the report must trace to one of
 
 | Question | Tool | Notes |
 |---|---|---|
-| Azimuth / elevation bias, before/after correction | `scripts/aoa_bias_correct.py` | Live: `--mru --run --jobs` (chaotic correlation). Archive: `--archive <dump> --t0 --t1 --target`. Report the range-flatness slope; a sloped error is not a yaw error. |
+| Azimuth / elevation bias, before/after correction | `scripts/aoa_bias_correct.py` | Live: `--mru --run --jobs` (chaotic correlation). Archive: `--archive <dump> --t0 --t1 --target` (any quickdump-layout dump, dashboard saves included). Read the per-track pages (`aoa_bias_page_trk<ID>.png`) before quoting the pooled number: if one track's own median disagrees, refit with `--tracks` on the good one(s). Act only when range-flat, consistent across tracks, and above the 1° bar. |
 | Coverage, fragmentation, riders, handovers, gaps | manifest `tracking` block | Per flight. Coverage is fresh target-side states while the truth moves. |
 | Where tracks go bad (heat map, coast in turns vs straights, toxic cells) | `scripts/toxic_zones.py` | `--day "label:<dump>"` per day; 30 m cells, percentile colouring; exclude days with zero target-side tracks. |
 | Why tracks dropped | manifest `issues` hints | Classify each gap: turning, pad/climb, interceptor within 200 m, Doppler notch, straight cruise. Check track speed at the last published sample for the Delta 200 m/s speed-filter kill. |
