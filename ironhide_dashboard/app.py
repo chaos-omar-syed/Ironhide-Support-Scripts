@@ -111,6 +111,16 @@ with st.sidebar:
         # "Restart replay" (and "Pause replay" at X-Large) wrapped onto two lines and the row grew (clip audit 2026-09-14).
         st.button("Pause replay" if s["playing"] else "Play replay", on_click=D.toggle_play, width="stretch", help="Start or pause the archive replay clock.")
         st.button("Restart replay", on_click=D.restart, width="stretch", help="Jump back to 20 s before the flight window and play.")
+        # TIME SLIDER (2026-09-15): scrub the replay clock across the flight window.  Widget key seeded from the clock each main run
+        # (never a bare session key: Streamlit drops widget-backed keys on unmount); dragging seeks and PAUSES so the frame stays put.
+        _t0, _t1 = D.FLIGHT_WINDOWS[int(s["flight"])]
+        _lo, _hi = int(_t0 - D.REPLAY_LEAD_S), int(_t1)
+        s["_seek_w"] = int(min(max(D.now_t(), _lo), _hi))
+        def _seek_from_slider():
+            D.seek(float(s["_seek_w"]), keep_playing=False)
+        st.slider("Replay time", min_value=_lo, max_value=_hi, step=1, key="_seek_w", format=" ", on_change=_seek_from_slider,
+                  help="Drag to any moment of the flight (pauses the replay; press Play to continue).")
+        st.caption(f"{D.pdt_hms(_lo)}  ◂  {D.pdt_hms(float(s['_seek_w']))}  ▸  {D.pdt_hms(_hi)}")
         st.radio("Replay speed (× real time)", [1.0, 2.0, 4.0], key="speed", horizontal=True, format_func=lambda v: f"{v:g}×", on_change=D.speed_changed,
                  help="How fast the replay clock runs compared with real time (applies from now on; the clock never jumps).")
         verified = [p for p in D.passes(fl) if p.get("verified")]

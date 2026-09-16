@@ -954,7 +954,7 @@ def test_theme_css_never_clips_and_uses_three_inks():
 
 ICON_SELECTORS = ("stIconMaterial", "material-symbols", "stExpanderToggleIcon", "summary span", "span:first-child")
 SIDEBAR_LABELS = {  # widget label -> must have a help tooltip (ARCHIVE mode: the replay transport; "Refresh interval (s)" is LIVE-only)
-    "Metrics time window (s)", "Path history on map (s)", "Map zoom (m)", "Closest-approach gate (m)",
+    "Metrics time window (s)", "Path history on map (s)", "Replay time", "Map zoom (m)", "Closest-approach gate (m)",
     "Satellite imagery", "Radar blind-range rings (pulse width)", "Show uncorrelated radar tracks (ADS-B, clutter) while MAVLink truth is present", "Show raw radar detections on error plots", "Freeze display (pause updates)",
     "Replay speed (× real time)", "Screen size", "Text size", "Map frame",
 }
