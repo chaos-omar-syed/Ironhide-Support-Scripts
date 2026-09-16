@@ -327,7 +327,7 @@ def _status_parts(A: dict, snap: dict, t_now: float) -> tuple[list[str], list[st
         lab = roles() if callable(roles) else ""
     except Exception:
         lab = ""
-    if lab:
+    if lab and not D.is_live():                                                                                  # replay only (2026-09-15: "live it's useless")
         for piece in [p.strip() for p in lab.split("·")]:                                                       # only the ASSIGNED roles ("TGT mav14550_1_1"), never "INT —"
             if piece and not piece.endswith("—"):
                 parts.append(T.esc(piece))
