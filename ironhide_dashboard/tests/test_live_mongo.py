@@ -757,7 +757,7 @@ def test_mru39_newest_run_connected_no_truth_clean_empty_state():
     _no_leak(md)
     assert "OFFLINE" not in md and ("CONNECTED" in md or snap["has_truth"])
     tiles = _tiles(md)
-    assert tiles[2][2] == "—" and tiles[1][2] == "—" and tiles[0][2] in ("NO TRUTH", "NO TRACK")   # target track tile first
+    assert tiles[2][2] == "—" and tiles[1][2] == "—" and tiles[0][2] in ("NO TRUTH", "NO TRUTH FEED", "NO TARGET FEED", "NO TRACK")   # target track tile first
     st = _status(md)
     assert "NO TRUTH FEED" in st
     figs = LS.figs_of(at.session_state["_sid"])
