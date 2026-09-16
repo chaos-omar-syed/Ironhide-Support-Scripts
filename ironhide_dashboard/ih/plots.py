@@ -982,6 +982,27 @@ def vel_range(lo_v: list, hi_v: list, mem: dict | None = None, key: str = "vn") 
     return clamp_range(lo, hi, -VEL_CLAMP, VEL_CLAMP)
 
 
+def fill_sigma(t: np.ndarray, sg: np.ndarray, max_gap_s: float = 10.0) -> np.ndarray:
+    """σ for the covariance band on EVERY row: rows spa did not grade (tentative / coasting, or no covariance published) take the
+    linear interpolation between their graded neighbours when those are <= max_gap_s apart (edges: nearest within max_gap_s).
+    2026-09-15 user: "fix the gaps in the plot for covariance" — the band broke at every ungraded row."""
+    t = np.asarray(t, float); out = np.asarray(sg, float).copy()
+    fin = np.isfinite(out)
+    if fin.sum() < 1 or fin.all():
+        return out
+    tf, sf = t[fin], out[fin]
+    for i in np.flatnonzero(~fin):
+        j = np.searchsorted(tf, t[i])
+        left = tf[j - 1] if j > 0 else None; right = tf[j] if j < len(tf) else None
+        if left is not None and right is not None and (right - left) <= max_gap_s:
+            out[i] = sf[j - 1] + (sf[j] - sf[j - 1]) * (t[i] - left) / max(right - left, 1e-9)
+        elif left is not None and (t[i] - left) <= max_gap_s:
+            out[i] = sf[j - 1]
+        elif right is not None and (right - t[i]) <= max_gap_s:
+            out[i] = sf[j]
+    return out
+
+
 def track_pills(A: dict, P: dict | None = None) -> list[dict]:
     """Map track-number pills: "#177" at the newest point of the target's radar track and "#203" at the interceptor's,
     13 px mono in PRIMARY INK on a CARD pill whose 2 px border carries the role colour (target red / interceptor blue;
@@ -997,9 +1018,11 @@ def track_pills(A: dict, P: dict | None = None) -> list[dict]:
         # the target's pill sits ABOVE-right of its point, the interceptor's BELOW-right: at the CPA both heads are within a few
         # pixels and the two pills used to overlap (the panel's depill only stacks them by 26 px — less than one pill box at the
         # X-Large text scale).  Opposite sides put 28 px + both boxes between them, whatever the text scale.
-        out.append(dict(name=f"pill_{key[:3]}", xref="x", yref="y", x=round(float(last[TK["E"]]), 1), y=round(float(last[TK["N"]]), 1), text=f"#{int(tid)}",
-                        showarrow=False, font=dict(family=T.MONO, size=px(PILL_PX, P), color=T.INK), bgcolor=T.CARD,
-                        bordercolor=T.AMBER if A.get(flash_key) else col, borderwidth=2, borderpad=2,
+        coasting = key == "tgt_track" and str(A.get("track_state")) == "COASTING"      # 2026-09-15: "a small annotation on the top-down plot when we are coasting"
+        out.append(dict(name=f"pill_{key[:3]}", xref="x", yref="y", x=round(float(last[TK["E"]]), 1), y=round(float(last[TK["N"]]), 1),
+                        text=f"#{int(tid)}" + (" · COASTING" if coasting else ""),
+                        showarrow=False, font=dict(family=T.MONO, size=px(PILL_PX, P), color=T.AMBER if coasting else T.INK), bgcolor=T.CARD,
+                        bordercolor=T.AMBER if (A.get(flash_key) or coasting) else col, borderwidth=2, borderpad=2,
                         xanchor="left", yanchor="bottom" if above else "top", xshift=14, yshift=14 if above else -14))
     return out
 
@@ -1575,6 +1598,7 @@ def velocity_fig(A: dict, P: dict, window_s: float = 120.0, truth: np.ndarray | 
                 xs_line.append(xa[j]); ys_line.append(y[j]); ys_solid.append(y[j] if graded[j] else np.nan)
                 cd.append([f"{sg[j]:.1f} m/s" if np.isfinite(sg[j]) else "n/a", "" if graded[j] else (" · tentative" if kind[j] == "tent" else " · coasting")])
             # ±1σ band around the FILTERED STATE where spa had a real velocity σ (one polygon per run without breaks)
+            sg = fill_sigma(t, sg)                                            # bands continuous across tentative / coasting rows
             okb = np.isfinite(sg) & np.isfinite(y)
             if okb.any():
                 lo_v.append(float(np.nanmin((y - sg)[okb]))); hi_v.append(float(np.nanmax((y + sg)[okb])))

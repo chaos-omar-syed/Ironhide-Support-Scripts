@@ -329,7 +329,7 @@ def test_live_full_run_anchored_pages_forward_merges_interceptor_feeds(fake):
     md = _md(at)
     _no_leak(md)
     st = _status(md)
-    assert "LIVE" in st and "trk/s" in st and "last data" in st and "d  ago" in st.replace("</b>", " ")
+    assert "LIVE" in st and "last data" in st and "d  ago" in st.replace("</b>", " ")   # (trk/s left the row 2026-09-15: the target Hz is in the counter)
     assert set(LS.figs_of(at.session_state["_sid"])) == set(FIG_KEYS)
     # second tick: forward paging only — the windowed finds cover (hi - overlap, t_now], never the whole window again
     c = fake.colls[FM.RUN_COLL]
@@ -358,7 +358,7 @@ def test_live_adsb_only_run_is_connected_not_offline(fake):
     tiles = _tiles(md)
     assert [t[2] for t in tiles] == ["NO TRUTH FEED", "—", "—"] and tiles[0][0] == "fail"   # target track tile first (ih.engine track_state, 2026-09-15:
     #                                                                                        no MAVLink truth at all is a FAIL state; a target-only gap is amber "NO TARGET FEED")
-    assert "NO TRUTH FEED" in _status(md) and "0.0  trk/s" in _status(md).replace("</b>", " ").replace("  ", " ") or "trk/s" in _status(md)
+    assert "NO TRUTH FEED" in _status(md)   # (trk/s left the row 2026-09-15)
     err = LS.figs_of(at.session_state["_sid"])["err"]
     reads = [a["text"] for a in err["layout"]["annotations"] if (a.get("name") or "").startswith("readout_")]
     assert reads == [PL.EMPTY_READOUT] * 4                                                     # four titled empty cards
@@ -380,7 +380,7 @@ def test_live_tracks_only_run_renders_grey_tracks_and_obs(fake):
     assert any(t.get("name") == "raw obs" and t.get("xaxis") == "x2" for t in figs["meas"]["data"])   # range-rate obs from amb_dop
     md = _md(at)
     _no_leak(md)
-    assert "NO TRUTH" in md and "radar tracks active" in md and "trk/s" in _status(md)
+    assert "NO TRUTH" in md and "radar tracks active" in md
     MATRIX.append(("live fake · tracks-only run (no truth)", "grey tracks on map + meas, obs incl. range rate"))
 
 
@@ -759,7 +759,7 @@ def test_mru39_newest_run_connected_no_truth_clean_empty_state():
     tiles = _tiles(md)
     assert tiles[2][2] == "—" and tiles[1][2] == "—" and tiles[0][2] in ("NO TRUTH", "NO TRACK")   # target track tile first
     st = _status(md)
-    assert "NO TRUTH FEED" in st and "trk/s" in st
+    assert "NO TRUTH FEED" in st
     figs = LS.figs_of(at.session_state["_sid"])
     assert set(figs) == set(FIG_KEYS)
     reads = [a["text"] for a in figs["err"]["layout"]["annotations"] if (a.get("name") or "").startswith("readout_")]

@@ -301,7 +301,10 @@ def _status_parts(A: dict, snap: dict, t_now: float) -> tuple[list[str], list[st
     for role, short in (("target", "TGT"), ("interceptor", "INT")):
         fs = [f for f in feeds if f["role"] == role]
         if not fs:
-            if A.get("has_truth", True) and (D.is_live() or role == "target"):
+            assigned = bool((D.role_assignment() if hasattr(D, "role_assignment") else {}).get(role))
+            if role == "target" and A.get("has_truth", True) and (D.is_live() or assigned):   # 2026-09-15: the row must fit — "INT FEED NONE" only when an interceptor is assigned
+                parts.append(_sw("na", f"{short} FEED NONE"))
+            elif role == "interceptor" and assigned:
                 parts.append(_sw("na", f"{short} FEED NONE"))
             continue
         best = min(fs, key=lambda f: order[f["state"]])
@@ -324,10 +327,12 @@ def _status_parts(A: dict, snap: dict, t_now: float) -> tuple[list[str], list[st
         lab = roles() if callable(roles) else ""
     except Exception:
         lab = ""
-    if lab and lab.replace("TGT", "").replace("INT", "").replace("—", "").replace("·", "").strip():   # never the empty "TGT — · INT —" (archive / roles unset)
-        parts.append(T.esc(lab))                                                                                  # "TGT mav14550_1_1 · INT mav14551_2_*"
+    if lab:
+        for piece in [p.strip() for p in lab.split("·")]:                                                       # only the ASSIGNED roles ("TGT mav14550_1_1"), never "INT —"
+            if piece and not piece.endswith("—"):
+                parts.append(T.esc(piece))
+    # (no "trk/s": the target track's own update rate is in the counter — user 2026-09-15)
     if D.is_live() and snap["ok"]:
-        parts.append(f"<b>{A.get('tracks_per_s', 0.0):.1f}</b> trk/s")
         if not A.get("has_truth", True):
             parts.append(_sw("na", "NO TRUTH FEED"))
         age = A.get("data_age")
