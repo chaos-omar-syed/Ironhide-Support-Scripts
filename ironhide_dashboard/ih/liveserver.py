@@ -149,7 +149,7 @@ ONE_RIGHT_MIN_PX = 260                                                 # mode "o
 MAP_MODEBAR_FALLBACK = 26                                              # ih.plots.MAP_MODEBAR_PX when ih.plots cannot be imported
 ONE_SEP_PX, ONE_ERR_PX = 200, ERR_MIN_PX                               # stacked mode card heights AT TEXT SCALE 1 (the iframe scrolls); err = the 53 px plot-area floor under the strips (462);
                                                                        # one_sep_px() / one_err_px() scale both (the separation card's own legend row, x tick row and axis title grow with the text)
-MEAS_PX = 520                                                          # measurement-space quad (its own iframe below the panel)
+MEAS_PX = 640                                                          # measurement-space figure (its own iframe below the panel; 3 rows since 2026-09-17 pm)
 VEL_STRIP_PX, VEL_STRIP_MIN_PX, VEL_STRIP_FRAC = 230, 160, 0.24        # two-column mode: the VELOCITY STRIP under the map (3 cards side by side) = 24 % of the panel, 160..230 px
 ONE_VEL_PX = 3 * (MIN_CARD_PX + ERR_HDR_PX) + ERR_T + ERR_B + 2 * ERR_GAP   # stacked mode: three velocity cards at the plot-area floor at text scale 1 (353; one_vel_px() scales it)
 COMPACT_ERR_PX = 480                                                   # error panel shorter than this: 12 px readouts (ih.plots)
@@ -283,14 +283,15 @@ def layout(preset: str | None = None, text_scale: float | None = None) -> dict:
     else:   # two columns: MAP over the VELOCITY STRIP (left) | separation over the error cards (right); the map gives up the strip's height
         vel = vel_strip_px(panel, ts)
         mode, mp, (sep, err) = "two", panel - 2 * HEADER_PX - vel, fit
-    return {"preset": name, "mode": mode, "panel": panel, "header": HEADER_PX, "map": mp, "sep": sep, "err": err, "vel": vel, "meas": MEAS_PX,
+    return {"preset": name, "mode": mode, "panel": panel, "header": HEADER_PX, "map": mp, "sep": sep, "err": err, "vel": vel, "meas": MEAS_PX, "meas_itc": MEAS_PX,
             "split": SPLIT, "split3": SPLIT3, "font_px": int(round(FONT_PX[name] * float(text_scale))), "line_w": float(LINE_W[name]),
             "text_scale": float(text_scale)}
 
 
 LAYOUT = layout(DEFAULT_PRESET, 1.0)   # the default preset's numbers at text scale 1 (Desktop 1080p: panel 860, map 582, sep 252, err 536, vel 206)
-FIG_KEYS = ("map", "sep", "err", "vel", "meas")
-PANEL_KEYS = ("map", "sep", "err", "vel")    # inside the one-screen iframe; "meas" has its own iframe below
+FIG_KEYS = ("map", "sep", "err", "vel", "meas", "meas_itc")
+PANEL_KEYS = ("map", "sep", "err", "vel")    # inside the one-screen iframe; "meas" (target) and "meas_itc" (interceptor) each have their own iframe below
+MEAS_CARD_KEYS = ("meas", "meas_itc")
 SAT_OPACITY = 0.85   # satellite underlay opacity (= ih.plots.SAT_OPACITY; 2026-09-17: 0.9 -> 0.85 under the brighter series)
 
 HEADERS = {  # constant card headers baked into the panel HTML (left text, right caption)
@@ -301,9 +302,11 @@ HEADERS = {  # constant card headers baked into the panel HTML (left text, right
     "err": ("Track quality", "±1σ band · 3D pos = 1σ radius · lighter segments + bottom strip = coasting/tentative (not in stats) · gaps > 3 s = dropout"),
     "vel": ("Velocity states · filtered track vs truth (m/s)",
             "red = MAVLink truth · ink = track filtered state · lighter = coasting/tentative · Δ/σ/containment vs truth · ±1σ band live only"),
-    "meas": ("Measurement space · truth, tracks & obs vs time",
-             "solid thick = truth (red target · blue interceptor) · thin = radar tracks (★ start ✕ end, labelled) · circles = raw obs · bistatic: TX/RX co-located → 2×mono · "
+    "meas": ("Measurement space · TARGET track vs target truth",
+             "solid thick = target truth (red) · thin = radar tracks (★ start ✕ end, labelled) · circles = raw obs · bistatic: TX/RX co-located → 2×mono · "
              "no obs range rate in archive replay (amb_dop not archived)"),
+    "meas_itc": ("Measurement space · INTERCEPTOR track vs interceptor truth",
+                 "solid thick = interceptor truth (blue) · thin = the interceptor's radar track (★ start ✕ end) · bistatic: TX/RX co-located → 2×mono · not graded, no obs"),
 }
 
 STORE: dict[str, dict] = {}                 # sid -> {"stamp", "clock", "t_now", "frozen", "figs": {k: bytes}, "fig_stamps": {k: int}, "heads", "head_imgs", "tails", "view", "ui", "more", "sat_fn", "sat_on", "wall"}
@@ -1425,18 +1428,21 @@ html,body{{margin:0;padding:0;background:{T.SURFACE};color:{T.INK};overflow:hidd
 .h::before{{content:"";display:inline-block;width:6px;height:6px;background:{T.RED};flex:none;align-self:center;}}
 .h .r{{margin-left:auto;min-width:0;flex:0 1 auto;text-transform:none;letter-spacing:0;color:{T.INK3};overflow:hidden;white-space:nowrap;}}
 .h .r .cap[hidden]{{display:none;}}
-#meas{{width:100%;height:{L['meas']}px;background:{T.CARD};}}
+#meas,#meas_itc{{width:100%;height:{L['meas']}px;background:{T.CARD};}}
 </style>"""
 
 
-def meas_html(sid: str, host: str, port_: int, period_ms: int, L: dict | None = None) -> str:
+def meas_html(sid: str, host: str, port_: int, period_ms: int, L: dict | None = None, key: str = "meas") -> str:
+    """The measurement-space card iframe for ONE figure key: "meas" (target) or "meas_itc" (interceptor) — same markup, its own
+    header words, polls figs.json?keys=<key> and draws into <div id=<key>>."""
     L = L or LAYOUT
-    H = HEADERS["meas"]
+    assert key in MEAS_CARD_KEYS, key
+    H = HEADERS[key]
     body = (f'<div class="h" title="{T.esc(H[0])} — {T.esc(H[1])}"><span>{T.esc(H[0])}</span>'
-            f'<span class="r"><span class="cap">{T.esc(H[1])}</span></span></div><div id="meas"></div>')
+            f'<span class="r"><span class="cap">{T.esc(H[1])}</span></span></div><div id="{key}"></div>')
     js = f"""<script>
 (function(){{
-  var SID={json.dumps(sid)}, HOST={json.dumps(host)}, PORT={int(port_)}, P={int(max(period_ms, 1000))}, HF={int(L['meas'])}, F={int(L['font_px'])};
+  var SID={json.dumps(sid)}, HOST={json.dumps(host)}, PORT={int(port_)}, P={int(max(period_ms, 1000))}, HF={int(L['meas'])}, F={int(L['font_px'])}, K={json.dumps(key)};
   if(!HOST){{ try{{ HOST=parent.location.hostname; }}catch(e){{ HOST=location.hostname; }} }}
   var BASE="http://"+HOST+":"+PORT, CFG={{scrollZoom:true,displayModeBar:false,displaylogo:false,responsive:false}};   // resized by our own listener below; 2026-09-15: displayModeBar false like the other card figures — the hover buttons' row sat over this figure's key
   var have="", stamp=null, made=false, fetching=false;
@@ -1445,11 +1451,11 @@ def meas_html(sid: str, host: str, port_: int, period_ms: int, L: dict | None = 
     Object.keys(layout).forEach(function(a){{ if(/^[xy]axis\\d*$/.test(a)){{ var ax=layout[a]; if(ax.tickfont) ax.tickfont.size=f; if(ax.title&&ax.title.font) ax.title.font.size=f; }} }}); return layout; }}
   function tick(){{
     if(fetching||!window.Plotly) return; fetching=true;
-    fetch(BASE+"/figs.json?sid="+encodeURIComponent(SID)+"&keys=meas&meas="+have+"&since="+(stamp===null?"":stamp),{{cache:"no-store"}})
+    fetch(BASE+"/figs.json?sid="+encodeURIComponent(SID)+"&keys="+K+"&"+K+"="+have+"&since="+(stamp===null?"":stamp),{{cache:"no-store"}})
     .then(function(r){{ return r.status===404?null:r.json(); }})
-    .then(function(j){{ if(!j||j.unchanged||!j.figs||!j.figs.meas) return; stamp=j.stamp; var f=j.figs.meas; fit(f.layout);
-      return (made?Plotly.react("meas",f.data,f.layout,CFG):Plotly.newPlot("meas",f.data,f.layout,CFG).then(function(){{ made=true; }})).then(function(){{ have=String(j.meas_stamp||""); }}); }})
-    .catch(function(e){{ console.warn("meas",e); }}).then(function(){{ fetching=false; }});
+    .then(function(j){{ if(!j||j.unchanged||!j.figs||!j.figs[K]) return; stamp=j.stamp; var f=j.figs[K]; fit(f.layout);
+      return (made?Plotly.react(K,f.data,f.layout,CFG):Plotly.newPlot(K,f.data,f.layout,CFG).then(function(){{ made=true; }})).then(function(){{ have=String(j[K+"_stamp"]||""); }}); }})
+    .catch(function(e){{ console.warn(K,e); }}).then(function(){{ fetching=false; }});
   }}
   function fitCap(){{                                                    // the caption is hidden WHOLE when the header row is too narrow for it (the panel does the same; the full text stays in the header's title)
     var r=document.querySelector(".h .r"), c=document.querySelector(".h .cap"); if(!r||!c) return;
@@ -1457,13 +1463,13 @@ def meas_html(sid: str, host: str, port_: int, period_ms: int, L: dict | None = 
   }}
   fitCap();
   var s=document.createElement("script"); s.src=BASE+"/plotly.min.js"; s.onload=function(){{ tick(); setInterval(tick,Math.max(P,2000)); }}; document.head.appendChild(s);
-  window.addEventListener("resize",function(){{ fitCap(); if(made) Plotly.Plots.resize("meas"); }});
+  window.addEventListener("resize",function(){{ fitCap(); if(made) Plotly.Plots.resize(K); }});
 }})();
 </script>"""
     return meas_css(L) + body + js
 
 
-__all__ = ["adopt", "DEFAULT_PORT", "LAYOUT", "PRESETS", "DEFAULT_PRESET", "FONT_PX", "LINE_W", "layout", "err_hdr_px", "err_min_px", "one_sep_px", "one_err_px", "one_vel_px", "one_row", "map_top_nolegend_px", "vel_strip_px", "map_margin_px", "HEADERS", "FIG_KEYS", "PANEL_KEYS", "STORE",
+__all__ = ["adopt", "DEFAULT_PORT", "LAYOUT", "PRESETS", "DEFAULT_PRESET", "FONT_PX", "LINE_W", "layout", "err_hdr_px", "err_min_px", "one_sep_px", "one_err_px", "one_vel_px", "one_row", "map_top_nolegend_px", "vel_strip_px", "map_margin_px", "HEADERS", "FIG_KEYS", "PANEL_KEYS", "MEAS_CARD_KEYS", "STORE",
            "IMAGES", "SAT", "start", "stop", "is_up", "port", "last_error", "push", "set_frozen", "has", "figs_of", "fig_dict", "fig_json",
            "strip_map_range", "response_body", "parse_view", "sat_key", "browser_host", "host_from_header", "panel_css", "panel_body",
            "panel_script", "panel_html", "panel_core_js", "responsive_js", "VIEW_JS", "ENVELOPE_JS", "HELPERS_JS", "meas_html", "meas_css",

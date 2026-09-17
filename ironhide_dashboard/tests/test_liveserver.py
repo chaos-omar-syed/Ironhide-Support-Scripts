@@ -211,13 +211,13 @@ def test_layout_presets_geometry():
         assert (L["err"] - LS.ERR_T - LS.ERR_B - 3 * LS.ERR_GAP) / 4 - LS.ERR_HDR_PX >= LS.MIN_CARD_PX   # plot area under the header strip
         assert abs(L["sep"] / (L["sep"] + L["err"]) - LS.SEP_FRAC) < 0.01 and LS.SEP_FRAC == 0.32 and LS.SEP_FRAC3 == 0.26   # separation ~32 % (2-col) / 26 % of the middle column (3-col)
     assert LS._fit_two(688) == (688 - 2 * LS.HEADER_PX - LS.ERR_MIN_PX, LS.ERR_MIN_PX) and LS._fit_two(688)[0] >= LS.SEP_MIN_PX   # a 1080p browser (fitted panel 688) keeps two columns
-    assert Ll["map"] == Ll["sep"] == Ll["panel"] - Ll["header"] and Ll["meas"] == Ld["meas"] == LS.MEAS_PX == 520
+    assert Ll["map"] == Ll["sep"] == Ll["panel"] - Ll["header"] and Ll["meas"] == Ld["meas"] == Ll["meas_itc"] == LS.MEAS_PX == 640
     assert LS.layout(None, 1.0) == LS.layout("nope", 1.0) == LS.LAYOUT == Ld and LS.DEFAULT_PRESET == "Desktop 1080p"
     assert LS.layout("Large 1440p", 1.15)["font_px"] == 18 and LS.layout("Desktop 1080p", 1.3)["font_px"] == 18   # "Text size" scales the figure fonts
     assert list(LS.PRESETS) == ["Laptop", "Desktop 1080p", "Large 1440p"] and LS.SPLIT == (62, 38) and LS.SPLIT3 == (46, 27, 27)   # the MAP dominates; 3-col = map | sep + velocity | error
     assert LS._fit_two(860) == (Ld["sep"], Ld["err"]) and LS._fit_two(720) == (720 - 2 * LS.HEADER_PX - LS.ERR_MIN_PX, LS.ERR_MIN_PX) and LS._fit_two(600) is None   # the 53 px plot-area floor (+ 46 px strips), then stacked
     assert LS.ERR_HDR_PX == PL.err_strip_px(PL.READOUT_PX, PL.READOUT_SUB_PX)[0] == PL.err_strip_px(18, 12)[0]   # the strip follows the plots readout sizes (46)
-    assert LS.ERR_MIN_PX == 4 * (LS.MIN_CARD_PX + LS.ERR_HDR_PX) + LS.ERR_T + LS.ERR_B + 3 * LS.ERR_GAP and LS.ONE_ERR_PX == LS.ERR_MIN_PX and LS.FIG_KEYS == ("map", "sep", "err", "vel", "meas") and LS.PANEL_KEYS == ("map", "sep", "err", "vel")
+    assert LS.ERR_MIN_PX == 4 * (LS.MIN_CARD_PX + LS.ERR_HDR_PX) + LS.ERR_T + LS.ERR_B + 3 * LS.ERR_GAP and LS.ONE_ERR_PX == LS.ERR_MIN_PX and LS.FIG_KEYS == ("map", "sep", "err", "vel", "meas", "meas_itc") and LS.PANEL_KEYS == ("map", "sep", "err", "vel")
 
 
 def test_unknown_sid_404_and_gzip():
@@ -260,7 +260,9 @@ def test_panel_html_is_pure_and_bakes_sid_host_port_cadence_and_preset():
     assert LS.host_from_header("mru91-mx") == "mru91-mx" and LS.host_from_header(None) == ""
     # the measurement-space iframe: its own constant page polling keys=meas
     m = LS.meas_html("abc123", "172.18.1.28", 8902, 1000)
-    assert 'id="meas"' in m and "keys=meas" in m and f"#meas{{width:100%;height:{L['meas']}px" in m and "Plotly.react" in m and "Plotly.Plots.resize" in m
+    assert 'id="meas"' in m and 'K="meas"' in m and '"&keys="+K' in m and f"#meas,#meas_itc{{width:100%;height:{L['meas']}px" in m and "Plotly.react" in m and "Plotly.Plots.resize" in m
+    mi = LS.meas_html("sid", "h", 8902, 1000, L, key="meas_itc")                       # 2026-09-17 pm: the interceptor card = the same iframe for its own key
+    assert 'id="meas_itc"' in mi and 'K="meas_itc"' in mi and LS.HEADERS["meas_itc"][0] in mi and "INTERCEPTOR" in LS.HEADERS["meas_itc"][0]
 
 
 def test_panel_js_has_the_responsive_breakpoints_view_lock_and_tween():
@@ -362,7 +364,7 @@ def test_panel_html_draws_heads_in_a_dom_overlay_and_never_relayouts_them():
     assert "±1σ band" in LS.HEADERS["err"][1] and "3D pos = 1σ radius" in LS.HEADERS["err"][1] and "dotted" not in LS.HEADERS["err"][1]
     assert "lighter segments + bottom strip = coasting/tentative (not in stats)" in LS.HEADERS["err"][1] and "gaps > 3 s = dropout" in LS.HEADERS["err"][1]
     assert len(LS.HEADERS["map"][1]) <= 80 and len(LS.HEADERS["err"][1]) <= 130          # captions are hidden whole when a column is too narrow
-    assert "solid thick = truth (red target · blue interceptor)" in LS.HEADERS["meas"][1] and "circles = raw obs" in LS.HEADERS["meas"][1] and "2×mono" in LS.HEADERS["meas"][1]
+    assert "solid thick = target truth (red)" in LS.HEADERS["meas"][1] and "circles = raw obs" in LS.HEADERS["meas"][1] and "2×mono" in LS.HEADERS["meas"][1]   # 2026-09-17 pm: target-only card
     assert 'class="cap"' in LS.panel_body() and "fitCaptions" in LS.responsive_js() and 'title="' in LS.panel_body()   # hidden whole, never cut mid-word
     assert "amb_dop" in LS.HEADERS["meas"][1]
 

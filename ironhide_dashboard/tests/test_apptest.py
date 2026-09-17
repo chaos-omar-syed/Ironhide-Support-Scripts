@@ -82,7 +82,7 @@ F1_LATE = D.hms_to_epoch("07:24:15")    # F1: after the 177 -> 203 handover (07:
 F1_HAND = D.hms_to_epoch("07:21:50")    # F1: just before the 129 -> 177 handover (~07:21:57)
 APP = f"{ROOT}/app.py"
 TIMEOUT = 180
-CHART_KEYS = ["live_map", "live_sep", "live_err", "live_vel", "live_meas"]  # fallback-path emission order (map left, sep + err right, velocity, meas below)
+CHART_KEYS = ["live_map", "live_sep", "live_err", "live_vel", "live_meas", "live_meas_itc"]  # fallback-path emission order (map left, sep + err right, velocity, meas below)
 FIG_KEYS = ("map", "sep", "err", "vel", "meas")
 HAVE0 = {k: "" for k in FIG_KEYS}
 SERIES = ("separation to truth", "separation to track", "closing rate", "interceptor truth", "target truth")   # 2026-09-17: sep card = truth + TRACK series (horizontal dropped)
@@ -95,7 +95,7 @@ def _at(page: str, **state) -> AppTest:
     at.session_state["show_sat"] = False  # no tile fetches in tests
     if "text_scale" not in at.session_state:
         at.session_state["text_scale"] = "Normal"   # tests render at Normal text unless they set it (the Desktop default is Large since 2026-09-11)
-    at.session_state["meas_open"] = True  # the measurement-space quad is collapsed by default (A15): most figure tests want it built + pushed
+    at.session_state["meas_open"] = True  # the measurement-space quad is collapsed by default (A15): most figure tests want it built + pushed (the interceptor card stays collapsed unless a test opens it)
     for k, v in state.items():
         at.session_state[k] = v
     return at
@@ -373,7 +373,7 @@ def test_live_fallback_when_panel_port_unavailable():
         charts = _charts(at)
         assert [i.rsplit("-", 1)[-1] for i, _, _ in charts] == CHART_KEYS
         for i, spec, cfg in charts:
-            assert json.loads(spec)["layout"]["uirevision"] == PL.UIREV[i.rsplit("_", 1)[-1]]
+            assert json.loads(spec)["layout"]["uirevision"] == PL.UIREV[i.split("live_", 1)[-1]]
             assert json.loads(cfg) == ({"scrollZoom": True, "displayModeBar": True, "displaylogo": False, "doubleClick": "reset"} if i.endswith("map") else
                                        {"scrollZoom": True, "displayModeBar": True, "displaylogo": False})
         srcs = [im["source"] for im in json.loads(charts[0][1])["layout"].get("images", [])]
@@ -418,7 +418,7 @@ def test_heads_and_head_images_in_figs_json_and_map_has_no_icon_images():
     tt = next(t for t in _figs(at)["map"]["data"] if t.get("name") == "target truth")           # live-segment anchor = the drawn trail's last point
     assert body["tails"]["tgt"] == [round(float(_arr(tt["x"])[-1]), 1), round(float(_arr(tt["y"])[-1]), 1)] and body["tails"]["itc"] is not None
     assert body["view"]["mode"] == "engage" and body["view"]["rev"] == 0 and body["ui"] == {"font_px": 13, "line_w": 2.5, "preset": "Laptop", "text_scale": 1.0}   # 2026-09-15: the default preset is Laptop (D.STATE_DEFAULTS["screen"])
-    assert [p["name"] for p in body["pills"]] == ["pill_tgt"] and body["pills"][0]["text"] == "#177"   # map track-number pill rides the envelope (2026-09-17: no interceptor-track pill)
+    assert [p["name"] for p in body["pills"]] == ["pill_tgt", "pill_itc"] and body["pills"][0]["text"] == "#177"   # map track-number pills ride the envelope (2026-09-17 pm: the interceptor's pill is back)
     assert isinstance(body["more"], list) and body["more"] and body["more"][0][0] == "Coverage · 60 s"
     # heads match the engine's truth heads
     A_t = heads["tgt"]
@@ -575,7 +575,7 @@ def test_live_figures_follow_mark_and_chrome_spec():
         # track_status annotation (2026-09-15: "#177 CONFIRMED" above the plot in the STATE colour, like the status word on the line)
         for a in L.get("annotations", []):
             nm = a.get("name") or ""
-            if nm == "track_status":
+            if nm in ("track_status", "itc_status"):
                 assert k == "map" and a["font"]["color"] in (T.GREEN, T.AMBER, T.FAIL, T.NA), (k, a)
                 continue
             assert a["font"]["color"] in (T.INK, T.INK2, T.INK3) or nm.startswith("pill_"), (k, a)
@@ -786,7 +786,7 @@ def test_cpa_marked_on_map_sep_and_every_error_and_velocity_card():
             lab = [a for a in figs[k]["layout"].get("annotations", []) if a.get("name") == "cpa_map_label"]
             assert len(lab) == 1 and lab[0]["text"] == "CPA 59 m" and lab[0]["font"]["color"] == T.INK and lab[0]["font"]["size"] >= 14 and lab[0]["bgcolor"] == PL.TAG_BG
         else:   # separation: the ★ stays, its words left the plot area (hover + the card header HUD "CPA 59 m · 07:22:31")
-            assert "text" not in s_[0] and "CPA" in s_[0]["hovertemplate"] and "07:22:31" in s_[0]["hovertemplate"]
+            assert s_[0]["mode"] == "markers+text" and s_[0]["text"] == ["CPA 59 m"] and "CPA" in s_[0]["hovertemplate"] and "07:22:31" in s_[0]["hovertemplate"]   # 2026-09-17 pm: the value rides ON the ★
             assert _store(at)["hud"] == {"cpa": "CPA truth 59 m · 07:22:31 · CPA track 60 m · 07:22:30"}   # 2026-09-17: both CPAs (track = interceptor truth <-> #177)
             assert any((t.get("name") or "") == "_anchor_pad" for t in figs[k]["data"])                 # 2 % right padding anchor
         assert not any(t.get("name") == "closest so far" for t in figs[k]["data"])
@@ -798,7 +798,7 @@ def test_cpa_marked_on_map_sep_and_every_error_and_velocity_card():
         gold = [sh for sh in Lk.get("shapes", []) if (sh.get("line") or {}).get("color") == T.GOLD]
         assert [sh["name"] for sh in gold] == [f"cpa_line_{r}" for r in range(1, rows + 1)], (k, [sh["name"] for sh in gold])
         for r, sh in enumerate(gold, start=1):
-            assert sh["type"] == "line" and sh["layer"] == "above" and sh["line"]["width"] == 1
+            assert sh["type"] == "line" and sh["layer"] == "above" and sh["line"]["width"] == PL.CPA_LINE_W
             assert sh["xref"] == ("x" if r == 1 else f"x{r}") and sh["yref"] == ("y domain" if r == 1 else f"y{r} domain")
             assert sh["x0"] == sh["x1"] and (sh["y0"], sh["y1"]) == (0, 1)
         assert not [t for t in figs[k]["data"] if t.get("name") == "CPA"], k          # a hairline, never a ★ trace
@@ -855,7 +855,8 @@ def test_cpa_gate_f1_before_after_and_gate_width():
     run = at.session_state["cpa_run"]
     assert abs(run[0] - 78.4) < 0.6 and D.pdt_hms(run[1]) == "07:21:43" and at.session_state["cpa_ok"] is None
     stars, hair, hud, tile = state(at)
-    assert (stars, hair, hud) == (0, 0, "") and tile[0] == "na" and tile[2] == "78<small>m</small>" and "no CPA yet" in tile[3]
+    # 2026-09-17 pm: no validated pass -> the card marks the AIRBORNE closest-so-far instead (hollow ★ + dotted hairline + header words), never nothing
+    assert (stars, hair) == (0, 1) and hud == "closest so far 78 m · 07:21:43 · no pass under 70 m gate" and tile[0] == "na" and tile[2] == "78<small>m</small>" and "no CPA yet" in tile[3]
     # ... accepted by a 100 m gate (sidebar control)
     at = _at(LIVE, flight=1, anchor_t=F1_P1, playing=False, cpa_gate_m=100.0).run()
     assert not _exc(at), _exc(at)
@@ -865,7 +866,7 @@ def test_cpa_gate_f1_before_after_and_gate_width():
     assert (stars, hair, hud) == (2, 1, "CPA truth 78 m · CPA track — · 07:21:43") and tile[0] == "gold" and "CPA 78 m" in tile[3]   # 2026-09-17: no track CPA at pass 1 (#177 read 143 m)
     # the minimum of pass 2 itself: still closing -> not yet
     at = _at(LIVE, flight=1, anchor_t=F1_MID, playing=False).run()
-    assert at.session_state["cpa_ok"] is None and state(at)[:3] == (0, 0, "")
+    assert at.session_state["cpa_ok"] is None and state(at)[:2] == (0, 1) and state(at)[2].startswith("closest so far ")   # 2026-09-17 pm: the closest-so-far mark
     # pass 2 over: first valid CPA at the default gate = 59 m @ 07:22:31
     at = _at(LIVE, flight=1, anchor_t=F1_AFTER, playing=False).run()
     ok = at.session_state["cpa_ok"]
@@ -893,13 +894,14 @@ def test_map_shows_trails_track_line_cpa_only():
     if PL.blind_rings():            # rings only when the modes library resolves DEFAULT_MODES (not in every checkout)
         expect.add("blind zone (c·pw/2)")
     assert names == expect, names
-    assert not any((t.get("name") or "").startswith("interceptor track #") for t in data)   # 2026-09-17 hard rule: the interceptor's radar track is never drawn
+    itc_trk = [t for t in data if (t.get("name") or "").startswith("interceptor track #")]   # 2026-09-17 pm: the interceptor's radar track IS on the map (off the key), nowhere else
+    assert len(itc_trk) == 1 and itc_trk[0]["showlegend"] is False and itc_trk[0]["opacity"] == PL.ITC_TRACK_ALPHA and itc_trk[0]["line"]["color"] == T.INTERCEPTOR
     for bad in ("measurement", "coasting", "tentative", "other tracks"):
         assert not any(bad in (t.get("name") or "") for t in data), bad
     trk = next(t for t in data if t.get("name") == "target track #177")
     assert trk["type"] == "scattergl" and trk["mode"] == "lines" and trk["line"] == {"color": T.TARGET, "width": max(PL.LINE_W, PL.TRACK_W), "dash": "dash"}   # 2026-09-17: 3 px over a halo
     halos = [t for t in data if (t.get("name") or "").startswith("_halo ")]
-    assert {t["name"] for t in halos} == {"_halo interceptor truth", "_halo target truth", "_halo target track #177"} and all(t["showlegend"] is False and t["line"] == {"color": PL.HALO, "width": PL.HALO_W} for t in halos)
+    assert {t["name"] for t in halos} >= {"_halo interceptor truth", "_halo target truth", "_halo target track #177"} and len(halos) == 4 and all(t["showlegend"] is False and t["line"] == {"color": PL.HALO, "width": PL.HALO_W} for t in halos)
     assert not any("markers" in (t.get("mode") or "") and (t.get("marker") or {}).get("symbol") in ("triangle-up",) for t in data)
     assert not any(t.get("hovertemplate", "").startswith(("target truth<br>", "interceptor truth<br>")) for t in data)   # no invisible head hover traces
 
@@ -1203,10 +1205,10 @@ def test_screen_presets_drive_iframe_height_figure_heights_fonts_and_line_width(
             assert (L["map"], L["sep"], L["err"]) == (panel - LS.HEADER_PX, panel - LS.HEADER_PX, LS.one_err_px(1.0))
             assert (L["map"], L["sep"], L["err"], L["vel"]) == (568, 568, 486, 371) and LS.ONE_ERR_PX == 486 and LS.ONE_VEL_PX == 371
         mp, sep, err = L["map"], L["sep"], L["err"]
-        assert heights == [panel + 4, 520 + LS.HEADER_PX + 4], (preset, heights)
+        assert heights == [panel + 4, 640 + LS.HEADER_PX + 4], (preset, heights)   # 2026-09-17 pm: 3-row measurement card (the interceptor card is collapsed here)
         figs = _figs(at)
         got = {k: figs[k]["layout"]["height"] for k in FIG_KEYS}
-        assert got.pop("vel") >= L["vel"] and got == {"map": mp, "sep": sep, "err": err, "meas": 520}
+        assert got.pop("vel") >= L["vel"] and got == {"map": mp, "sep": sep, "err": err, "meas": 640}
         for k in FIG_KEYS:
             assert figs[k]["layout"]["font"]["size"] == font and figs[k]["layout"]["xaxis"]["tickfont"]["size"] == font and figs[k]["layout"]["legend"]["font"]["size"] == font
         tt = next(t for t in figs["map"]["data"] if t.get("name") == "target truth")
@@ -1298,12 +1300,12 @@ def test_measurement_space_quad_truth_tracks_obs():
     assert not _exc(at), _exc(at)
     m = _figs(at)["meas"]
     L, data = m["layout"], m["data"]
-    assert L["height"] == 520 and L["uirevision"] == PL.UIREV["meas"] == "live-meas" and L["showlegend"] is True and L["legend"]["font"]["size"] >= 12
+    assert L["height"] == 640 and L["uirevision"] == PL.UIREV["meas"] == "live-meas" and L["showlegend"] is True and L["legend"]["font"]["size"] >= 12
     titles = [a for a in L["annotations"] if (a.get("name") or "").startswith("title_")]
-    assert [a["text"] for a in titles] == ["<b>BISTATIC RANGE (KM)</b>", "<b>BISTATIC RANGE RATE (M/S)</b>", "<b>AZIMUTH (°)</b>", "<b>ELEVATION (°)</b>"]
+    assert [a["text"] for a in titles] == ["<b>BISTATIC RANGE (KM)</b>", "<b>BISTATIC RANGE RATE (M/S)</b>", "<b>AZIMUTH (°)</b>", "<b>ELEVATION (°)</b>", "<b>ALTITUDE (M HAE)</b>"]
     assert all(a["font"]["size"] == PL.MEAS_TITLE_PX for a in titles)   # the measurement quad keeps its 12 px panel titles
     axes = {k: v for k, v in L.items() if k.startswith(("xaxis", "yaxis"))}
-    assert set(axes) == {"xaxis", "xaxis2", "xaxis3", "xaxis4", "yaxis", "yaxis2", "yaxis3", "yaxis4"} and not any("overlaying" in v for v in axes.values())
+    assert set(axes) == {"xaxis", "xaxis2", "xaxis3", "xaxis4", "xaxis5", "yaxis", "yaxis2", "yaxis3", "yaxis4", "yaxis5"} and not any("overlaying" in v for v in axes.values())
     assert [axes[f"yaxis{i}" if i > 1 else "yaxis"]["title"]["text"] for i in (1, 2, 3, 4)] == ["bistatic range (km)", "bistatic range rate (m/s)", "azimuth (°)", "elevation (°)"]
     # z-order: the FIRST trace of every panel is the obs layer (where there are obs), truths come after every track line
     per_axis = {}
@@ -1319,10 +1321,20 @@ def test_measurement_space_quad_truth_tracks_obs():
     assert PL.MEAS_OBS_COLOR == "#cfd6de" and obs[0]["legendgroup"] == "obs" and obs[0]["legendgrouptitle"]["text"] == "OBS"
     truth = [t for t in data if t.get("name") == "target truth"]
     itc_truth = [t for t in data if t.get("name") == "interceptor truth"]
-    assert len(truth) == 4 and all(t["line"] == {"color": T.TARGET, "width": PL.TRUTH_W} and t["mode"] == "lines" and t["legendgroup"] == "truth" for t in truth)
-    assert len(itc_truth) == 4 and all(t["line"] == {"color": T.INTERCEPTOR, "width": PL.TRUTH_W} for t in itc_truth) and truth[0]["legendgrouptitle"]["text"] == "TRUTH"
+    assert len(truth) == 5 and all(t["line"] == {"color": T.TARGET, "width": PL.TRUTH_W} and t["mode"] == "lines" and t["legendgroup"] == "truth" for t in truth)   # 5 panels (altitude row)
+    assert not itc_truth and truth[0]["legendgrouptitle"]["text"] == "TRUTH"   # 2026-09-17 pm: the TARGET card carries no interceptor truth — the interceptor has its own card
+    assert not any((t.get("name") or "").endswith("· interceptor") for t in data)
     lines = {(t["name"], t["xaxis"]) for t in data if re.fullmatch(r"#\d+ · target", t.get("name") or "") and t.get("mode") == "lines"}
-    assert {n for n, _ in lines} >= {"#129 · target", "#177 · target"} and {ax for _, ax in lines} == {"x", "x2", "x3", "x4"}
+    assert {n for n, _ in lines} >= {"#129 · target", "#177 · target"} and {ax for _, ax in lines} == {"x", "x2", "x3", "x4", "x5"}
+    # the INTERCEPTOR card: its truth (blue) + its own track only, no obs, same 5 panels
+    at2 = _at(LIVE, flight=1, anchor_t=F1_MID, playing=False, show_obs=True, meas_itc_open=True).run()
+    assert not _exc(at2), _exc(at2)
+    mi = _figs(at2)["meas_itc"]
+    di = mi["data"]
+    assert mi["layout"]["uirevision"] == PL.UIREV["meas_itc"] == "live-meas-itc"
+    assert [t["name"] for t in di if t.get("name") == "interceptor truth"] and not [t for t in di if t.get("name") in ("target truth", "raw obs")]
+    assert not any(re.fullmatch(r"#\d+ · target", t.get("name") or "") for t in di) and any((t.get("name") or "").endswith("· interceptor") for t in di)
+    assert [a["text"] for a in mi["layout"]["annotations"] if (a.get("name") or "").startswith("title_")] == [f"<b>{PL.MEAS_TITLE[k]}</b>" for k in PL.MEAS_KEYS]
     leg = [t for t in data if t.get("showlegend") and re.fullmatch(r"#\d+ · target", t.get("name") or "")]
     assert leg and leg[0]["legendgrouptitle"]["text"] == "TRACKS"
     starts = [t for t in data if (t.get("name") or "").endswith(" start")]
@@ -1391,15 +1403,15 @@ def test_meas_quad_gating_envelope_off_scale_and_steal():
     x_end = next(t for t in data if t.get("name") == "#177 · target end")["x"][0]
     assert str(x_end).startswith(str(D.to_pdt_dt64(np.array([tr["t"][tgt_side[-1]]]))[0])[:19])                                   # ✕ at the last target-side sample
     dep = [a for a in L["annotations"] if a.get("name", "").startswith("departed_177_")]
-    assert len(dep) == 4 and all(a["text"] == "→ interceptor (stolen)" and a["font"]["color"] == T.INK3 for a in dep)
+    assert len(dep) == 5 and all(a["text"] == "→ interceptor (stolen)" and a["font"]["color"] == T.INK3 for a in dep)   # 5 panels since the altitude row (2026-09-17 pm)
     thin = [t for t in data if t.get("name") == "#177 · target" and t.get("mode") == "lines" and t["line"]["width"] == PL.DEPARTED_W]
     itc_side = [t for t in data if t.get("name") == "#177 · target" and t.get("mode") == "lines" and t["line"]["color"] in PL.RAMP_ITC]
     assert not itc_side and thin and all(t["opacity"] == PL.DEPARTED_ALPHA for t in thin)   # 2026-09-17 hard rule: the stolen span is drawn departed-thin, never as the interceptor's (blue) track
-    # y-ranges = TRUTH envelope (both truths) ± 15 %, floors ± 0.6 km / ± 20 m/s / ± 2°; the tracks never widen them
-    for key, ax in (("rng", "yaxis"), ("rr", "yaxis2"), ("az", "yaxis3"), ("el", "yaxis4")):
-        want = PL.truth_envelope([M["truth"], M["truth_itc"]], key)
+    # y-ranges = TARGET TRUTH envelope ± 15 %, floors ± 0.6 km / ± 20 m/s / ± 2° / ± 30 m; the tracks never widen them (2026-09-17 pm: target truth only — the interceptor has its own card)
+    for key, ax in (("rng", "yaxis"), ("rr", "yaxis2"), ("az", "yaxis3"), ("el", "yaxis4"), ("alt", "yaxis5")):
+        want = PL.truth_envelope([M["truth"]], key)
         assert L[ax]["range"] == list(want), (key, L[ax]["range"], want)
-        v = np.concatenate([PL._meas_val(M["truth"], key), PL._meas_val(M["truth_itc"], key)])
+        v = PL._meas_val(M["truth"], key)
         lo, hi = float(np.nanmin(v)), float(np.nanmax(v))
         assert want[0] <= lo and want[1] >= hi and (want[1] - want[0]) >= 2 * PL.MEAS_MIN_HALF[key] - 1e-9
         assert (want[1] - want[0]) <= max(2 * PL.MEAS_MIN_HALF[key], (hi - lo) * 1.3) + 1e-9
@@ -1410,7 +1422,7 @@ def test_meas_quad_gating_envelope_off_scale_and_steal():
         _, key, tid, side_ = a["name"].split("_")
         trk = next(t for t in M["tracks"] if t["tid"] == int(tid))
         y = PL._meas_val(trk, key)
-        rng_ = L[{"rng": "yaxis", "rr": "yaxis2", "az": "yaxis3", "el": "yaxis4"}[key]]["range"]
+        rng_ = L[{"rng": "yaxis", "rr": "yaxis2", "az": "yaxis3", "el": "yaxis4", "alt": "yaxis5"}[key]]["range"]
         n = int((y > rng_[1]).sum() if side_ == "up" else (y < rng_[0]).sum())
         assert f"· {n} samples off scale" in a["hovertext"], (a["name"], a["hovertext"])
     # bistatic = 2 x mono (co-located TX): truth and obs, numerically

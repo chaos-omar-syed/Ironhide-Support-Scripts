@@ -120,11 +120,12 @@ PANEL = PORT is not None
 PERIOD_MS = int(CADENCE_S * 1000) if D.is_live() else int(D.REPLAY_TICK_S * 1000)
 L = LS.layout(s.get("screen"), T.text_scale())   # sidebar "Screen size" preset x "Text size" -> panel geometry / fonts / line width
 UI = {"font_px": L["font_px"], "line_w": L["line_w"], "preset": L["preset"], "text_scale": L["text_scale"]}
-if "meas_open" not in s:                                  # MEASUREMENT SPACE quad: collapsed by default, remembered per session + ?meas=1
-    try:
-        s["meas_open"] = str(st.query_params.get("meas", "")).lower() in ("1", "true", "yes")
-    except Exception:
-        s["meas_open"] = False
+for _mk, _qp in (("meas", "meas"), ("meas_itc", "itc")):     # MEASUREMENT SPACE cards (target / interceptor): collapsed by default, remembered per session + ?meas=1 / ?itc=1
+    if f"{_mk}_open" not in s:
+        try:
+            s[f"{_mk}_open"] = str(st.query_params.get(_qp, "")).lower() in ("1", "true", "yes")
+        except Exception:
+            s[f"{_mk}_open"] = False
 MEAS_MIN_PERIOD_S = 1.9                   # the measurement-space quad is re-sent at most this often (like the map)
 BADGE = T.build_badge()
 CRUMB = "Ironhide · Live · 2 / 2"         # pages: Data source (1 / 2, the landing page) · Live (2 / 2)
@@ -223,6 +224,7 @@ def _figures(A: dict, snap: dict, P: dict, W: int) -> tuple[dict, dict]:
         "vel": (common, t_now, n_last(tk), int(len(A["errors"]["t"])), n_last(snap.get("tgt")), _sig_events(A)),
         "meas": (common, t_now, int(len(snap.get("tracks") or {})), int(len(snap.get("obs", ()))), n_last(snap.get("tgt")), _sig_events(A)),
     }
+    sig["meas_itc"] = (sig["meas"], n_last(snap.get("itc")))
     old = s.setdefault("_fig_sig", {})
     cache = s.setdefault("_figs", {})
     changed = {k: old.get(k) != sig[k] or cache.get(k) is None for k in LS.FIG_KEYS}
@@ -232,6 +234,8 @@ def _figures(A: dict, snap: dict, P: dict, W: int) -> tuple[dict, dict]:
                                                        # rings / trail-length change is never delayed — while paused there is no next tick to catch it)
     if changed["meas"] and PANEL and cache.get("meas") is not None and now - s.get("_meas_wall", 0.0) < MEAS_MIN_PERIOD_S and old.get("meas", ())[:1] == (common,):
         changed["meas"] = False
+    if changed["meas_itc"] and PANEL and cache.get("meas_itc") is not None and now - s.get("_meas_itc_wall", 0.0) < MEAS_MIN_PERIOD_S and (old.get("meas_itc") or ((),))[0][:1] == (common,):
+        changed["meas_itc"] = False
     fp = {**P, "font_px": L["font_px"], "line_w": L["line_w"], "text_scale": L["text_scale"], "yrng_mem": s.setdefault("_yrng_mem", {})}   # per-session axis-range memory: no tick-to-tick jitter
     if changed["map"]:
         # panel path: the satellite tile travels in the envelope for the BROWSER's view (never inside the figure)
@@ -247,13 +251,17 @@ def _figures(A: dict, snap: dict, P: dict, W: int) -> tuple[dict, dict]:
     if changed["vel"]:   # velocity states: truth (snapshot window) vs the target track's filtered velocity, spa-graded Δ / σ / containment
         cache["vel"] = PL.velocity_fig(A, {**fp, "vel_height": L["vel"]}, window_s=float(W), truth=snap.get("tgt"))
         old["vel"] = sig["vel"]
-    if changed["meas"] and (s.get("meas_open") or not PANEL):   # collapsed quad: not built, not pushed (no background cost)
-        cache["meas"] = PL.meas_fig(E.meas_space(snap, A, float(W)), A, {**fp, "meas_height": L["meas"]})
-        s["_meas_wall"] = now
-        old["meas"] = sig["meas"]
-    elif changed["meas"]:
-        changed["meas"] = False
-        cache.setdefault("meas", None)
+    # the two measurement-space cards (target / interceptor) share one meas_space() pass; a collapsed card is not built, not pushed (no background cost)
+    M = None
+    for mk, role in (("meas", "tgt"), ("meas_itc", "itc")):
+        if changed[mk] and (s.get(f"{mk}_open") or not PANEL):
+            M = E.meas_space(snap, A, float(W)) if M is None else M
+            cache[mk] = PL.meas_fig(M, A, {**fp, "meas_height": L["meas"]}, role=role)
+            s[f"_{mk}_wall"] = now
+            old[mk] = sig[mk]
+        elif changed[mk]:
+            changed[mk] = False
+            cache.setdefault(mk, None)
     return cache, changed
 
 
@@ -562,9 +570,10 @@ def live_view() -> None:
         if figs.get("vel") is not None:
             T.card_header(*LS.HEADERS["vel"])
             st.plotly_chart(figs["vel"], key="live_vel", width="stretch", theme=None, config=CHART_CFG)
-        if figs.get("meas") is not None:
-            T.card_header(*LS.HEADERS["meas"])
-            st.plotly_chart(figs["meas"], key="live_meas", width="stretch", theme=None, config=CHART_CFG)
+        for mk in LS.MEAS_CARD_KEYS:
+            if figs.get(mk) is not None:
+                T.card_header(*LS.HEADERS[mk])
+                st.plotly_chart(figs[mk], key=f"live_{mk}", width="stretch", theme=None, config=CHART_CFG)
 
 
 def _sat_fn(ant_ll: tuple[float, float]):
@@ -588,13 +597,13 @@ def more_view() -> None:
             st.caption("waiting for the first tick")
 
 
-def _toggle_meas() -> None:
-    s["meas_open"] = not bool(s.get("meas_open"))
+def _toggle_meas(mk: str = "meas", qp: str = "meas") -> None:
+    s[f"{mk}_open"] = not bool(s.get(f"{mk}_open"))
     try:
-        if s["meas_open"]:
-            st.query_params["meas"] = "1"
+        if s[f"{mk}_open"]:
+            st.query_params[qp] = "1"
         else:
-            st.query_params.pop("meas", None)
+            st.query_params.pop(qp, None)
     except Exception:
         pass
 
@@ -609,9 +618,16 @@ if PANEL:
 _open = bool(s.get("meas_open"))
 st.button(LS.HEADERS["meas"][0].upper() + ("" if _open else "  ·  click or press m to expand"), key="meas_toggle", on_click=_toggle_meas, width="stretch",
           icon=":material/expand_less:" if _open else ":material/expand_more:",      # Streamlit's Material icon, never a dingbat in the label
-          help="Show / hide the measurement-space quad (bistatic range, range rate, azimuth, elevation vs time). Keyboard: m")
+          help="Show / hide the TARGET measurement-space card (bistatic range, range rate, azimuth, elevation, altitude vs time). Keyboard: m")
 if _open and PANEL:
     st.iframe(LS.meas_html(SID, host, PORT, PERIOD_MS, L), height=L["meas"] + L["header"] + 4)
+# 2026-09-17 pm: the INTERCEPTOR's own measurement-space card — its truth vs its radar track, never on the target's plots; minimized by default
+_open_i = bool(s.get("meas_itc_open"))
+st.button(LS.HEADERS["meas_itc"][0].upper() + ("" if _open_i else "  ·  click to expand"), key="meas_itc_toggle", on_click=_toggle_meas, args=("meas_itc", "itc"), width="stretch",
+          icon=":material/expand_less:" if _open_i else ":material/expand_more:",
+          help="Show / hide the INTERCEPTOR measurement-space card (its MAVLink truth vs its radar track). Not graded; never drawn on the target's cards.")
+if _open_i and PANEL:
+    st.iframe(LS.meas_html(SID, host, PORT, PERIOD_MS, L, key="meas_itc"), height=L["meas"] + L["header"] + 4)
 more_view()
 if D.is_live():                                                     # LIVE: primary "Save data to archive…" at the bottom (user 2026-09-15: at the top it "messes up all the spacing")
     c_save, _sp = st.columns([1, 2], gap="small")

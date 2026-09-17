@@ -42,7 +42,7 @@ from test_palette import contrast, delta_e, oklab  # noqa: E402
 
 DINGBAT = re.compile(r"[●▲✕○★◆■⟲❚▸▾]")
 INKS = {T.INK, T.INK2, T.INK3}
-SCALE = {0.75, 0.85, 1.0, 1.15, 1.3, 1.6, 2.0, 3.2}          # rem type steps
+SCALE = {0.75, 0.85, 1.0, 1.05, 1.15, 1.3, 1.6, 2.0, 3.2}    # rem type steps (1.05 = the status row under 1440 px, 2026-09-17 pm)
 FONT_RE = re.compile(r"font(?:-size)?:\s*(?:\d{3}\s+)?(\.?\d+(?:\.\d+)?)rem")
 LIVE = f"{ROOT}/views/1_live.py"
 F1_LATE = D.hms_to_epoch("07:24:15")   # two target-side tracks graded, 177 stolen by the interceptor, CPA validated
@@ -264,8 +264,8 @@ def test_g_figures_legend_iff_two_series_solid_hairline_grids_no_dual_axes_ink_t
             if nm.startswith(("handover_label_", "cpa_label", "endlbl_")):                                # error / velocity cards (user 2026-09-11: "what are these lines" ->
                 assert a.get("text") and a.get("text") != "▾" and a.get("font", {}).get("color") in INKS, (k, a)   # every line is LABELLED, in ink, at the top edge / line end)
                 continue
-            if nm == "track_status":                                                                      # THE ONE documented exception (2026-09-15 "add a track status to that top
-                assert k == "map" and re.fullmatch(r"<b>(#\d+ )?[A-Z][A-Z ]+</b>", str(a.get("text")))     # panel"): a STATE tag, so it wears the state colour like the html tiles/chips
+            if nm in ("track_status", "itc_status"):                                                      # THE documented exceptions (2026-09-15 "add a track status to that top
+                assert k == "map" and re.fullmatch(r"<b>(INT )?(#\d+ )?[A-Z][A-Z ]+</b>", str(a.get("text")))   # panel"; 2026-09-17 pm "INT #203 COASTING"): STATE tags wear the state colour
                 assert a.get("font", {}).get("color") in (T.GREEN, T.AMBER, T.FAIL, T.INK3), (k, a.get("font"))
                 continue
             assert a.get("font", {}).get("color") in INKS, (k, a.get("name"), a.get("font"))            # text never in a series colour
@@ -276,7 +276,7 @@ def test_g_figures_legend_iff_two_series_solid_hairline_grids_no_dual_axes_ink_t
             if nm.startswith("hdr_"):
                 assert s["type"] == "rect" and s["fillcolor"] == PL.HDR_BAND and s["layer"] == "below" and (s["line"] or {}).get("width") == 0, (k, s)
             elif nm.startswith("cpa_line_"):
-                assert s["type"] == "line" and s["line"]["color"] == T.GOLD and s["line"]["width"] == 1 and s["x0"] == s["x1"], (k, s)
+                assert s["type"] == "line" and s["line"]["color"] == T.GOLD and s["line"]["width"] == PL.CPA_LINE_W and s["x0"] == s["x1"], (k, s)
         for t in data:
             if t.get("textfont"):
                 assert t["textfont"].get("color") in INKS, (k, t.get("name"))
@@ -290,9 +290,9 @@ def test_g_figures_legend_iff_two_series_solid_hairline_grids_no_dual_axes_ink_t
                 assert t.get("hoverinfo") != "skip" or t.get("hovertemplate"), (k, name)              # a tooltip on every data series
     # the map pills: role colour on the border, primary ink on the text
     pills = {a["name"]: a for a in figs["map"]["layout"]["annotations"] if str(a.get("name", "")).startswith("pill_")}
-    assert set(pills) == {"pill_tgt"}                                                                      # 2026-09-17 hard rule: no interceptor-track pill
+    assert set(pills) == {"pill_tgt", "pill_itc"}                                                          # 2026-09-17 pm: the interceptor-track pill is back on the map
     assert pills["pill_tgt"]["font"]["color"] == T.INK and pills["pill_tgt"]["bordercolor"] == T.TARGET and pills["pill_tgt"]["borderwidth"] == 2
-    assert not any((t.get("name") or "").startswith("interceptor track") for t in figs["map"]["data"])    # ... and no interceptor-track trace
+    assert sum(1 for t in figs["map"]["data"] if (t.get("name") or "").startswith("interceptor track")) == 1   # 2026-09-17 pm: the interceptor-track trace is on the MAP only (off the key)
     assert not any(re.fullmatch(r"#\d+ · interceptor.*", t.get("name") or "") for t in figs["meas"]["data"])
     # legend present exactly where >= 2 series: map (truths + tracks), sep (truth · track · CPA), meas (grouped) — the error panel at
     # 07:24:15 grades ONE track (#203) and so carries none

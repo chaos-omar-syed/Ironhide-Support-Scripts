@@ -268,7 +268,7 @@ def test_interceptor_only_truth_draws_and_reads_no_target_feed():
     # 2026-09-15 default hides uncorrelated tracks while any MAVLink truth is up), every other active track grey / dashed / ungraded
     fig = PL.map_fig(A, {**P, "map_half": 1500.0, "map_height": 640, "show_sat": False, "show_blind": False, "frame": None, "show_free_tracks": True})
     names = [t.name for t in fig.data]
-    assert "interceptor truth" in names and not any(str(n).startswith("interceptor track") for n in names)
+    assert "interceptor truth" in names and "interceptor track #200" in names   # 2026-09-17 pm: the interceptor's radar track is back on the MAP (only there)
     assert names.count("radar tracks (no truth)") >= 5 and "radar track heads" in names
     grey = [t for t in fig.data if t.name == "radar tracks (no truth)"]
     assert all(t.line.color == T.GREY_TRACK and t.line.dash == "dash" for t in grey)

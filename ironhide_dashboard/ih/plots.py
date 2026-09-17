@@ -76,7 +76,7 @@ TR, TK = D.TR, D.TK
 LEADER_S = 5.0
 LINE_W = 2.5                                                  # every series line
 MARGIN = dict(l=48, r=12, t=28, b=36)                       # default; each figure passes a tighter one
-UIREV = {"map": "live-map", "sep": "live-sep", "err": "live-err", "vel": "live-vel", "meas": "live-meas"}  # constants — never derived from time/data
+UIREV = {"map": "live-map", "sep": "live-sep", "err": "live-err", "vel": "live-vel", "meas": "live-meas", "meas_itc": "live-meas-itc"}  # constants — never derived from time/data
 FONT_PX = 14                                                  # default figure font (ticks / titles / legend); the screen preset x text scale overrides (ui.font_px)
 # ── text metrics (Firefox / JetBrains Mono, measured in the panel: 18 px -> 11.25 px per glyph, 24 px line box) ──
 GLYPH_W = 0.625                                               # mono glyph width / font px
@@ -147,7 +147,7 @@ def card_margin(font_px: float = FONT_PX, text_scale: float = 1.0, t: int = CARD
 
 MARGINS = {"map": map_margin(FONT_PX), "sep": card_margin(FONT_PX, 1.0, t=22, autoexpand=True), "err": card_margin(FONT_PX, 1.0), "vel": card_margin(FONT_PX, 1.0)}   # ALL FIXED (automargin + autoexpand off: a tick-label- or legend-driven margin change re-constrained the map's equal-aspect ranges / slid the cards' plot areas = a visible "snap"); the card values are the text-scale-1 ones — the figures rebuild them with card_margin(font, scale)
 TRAIL_MAX_HZ = 2.0                                            # map trails are decimated to <= 2 points / s (cheaper reacts)
-ITC_TRACK_ALPHA = 0.5                                         # interceptor radar track on the map: faded, secondary to the target track
+ITC_TRACK_ALPHA = 0.85                                        # interceptor radar track on the map: a touch lighter than the target track (2026-09-17 pm: was 0.5 — "clearer")
 ITC_TRACK_W = 2.0
 LIVE_SEG = ("tgt_live", "itc_live")                          # names of the live-segment layout SHAPES the panel JS draws (trail tail -> tweened head)
 COMPACT_ERR_PX = 480                                          # error panel shorter than this: 12 px readouts
@@ -595,10 +595,12 @@ def map_fig(A: dict, P: dict) -> go.Figure:
         for im in heads_images(heads(A), x1 - x0):
             if im.get("visible"):
                 fig.add_layout_image(im)
-    # the TARGET's radar track: dashed estimate line (no per-state markers — coasting shows on the error panel as gaps), team red.
-    # 2026-09-17 HARD RULE (user): the INTERCEPTOR's radar track is NEVER drawn or shown anywhere — no trace, no legend entry, no
-    # pill, no metric; A["itc_tid"] / A["itc_track"] stay engine-internal.  Interceptor TRUTH (MAVLink) stays.
-    for key, tid_key, col, w, alpha in (("tgt_track", "tgt_tid", T.TARGET, max(lw, TRACK_W), 1.0),):
+    # the radar tracks: dashed estimate lines (no per-state markers — coasting shows on the error panel as gaps): TARGET team red,
+    # INTERCEPTOR team blue (a little lighter, off the one-row key — its pill names it).  2026-09-17 pm (user): the interceptor's radar
+    # track IS shown on the top-down (position + state) in live and replay — "just not in the altitude plot or metric comparisons":
+    # A["itc_track"] never reaches the error / velocity / separation cards, the CPA or any metric.  Interceptor TRUTH (MAVLink) stays.
+    for key, tid_key, col, w, alpha in (("tgt_track", "tgt_tid", T.TARGET, max(lw, TRACK_W), 1.0),
+                                        ("itc_track", "itc_tid", T.INTERCEPTOR, max(lw, TRACK_W), ITC_TRACK_ALPHA)):
         tk = A.get(key)
         if tk is None or not len(tk) or A.get(tid_key) is None:
             continue
@@ -606,9 +608,9 @@ def map_fig(A: dict, P: dict) -> go.Figure:
         if not len(tr):
             continue
         tr = downsample(tr)
-        name = f"target track #{A[tid_key]}"
+        name = f"{'target' if key == 'tgt_track' else 'interceptor'} track #{A[tid_key]}"
         fig.add_trace(halo_trace(tr[:, TK["E"]], tr[:, TK["N"]], name))
-        fig.add_trace(go.Scattergl(x=tr[:, TK["E"]], y=tr[:, TK["N"]], mode="lines", name=name, opacity=alpha, showlegend=True,
+        fig.add_trace(go.Scattergl(x=tr[:, TK["E"]], y=tr[:, TK["N"]], mode="lines", name=name, opacity=alpha, showlegend=key == "tgt_track",
                                    line=dict(color=col, width=w, dash="dash"), text=_hover_t(tr[:, 0]), customdata=_alt_spd(tr, TK, ant_hae),
                                    hovertemplate="%{text}<br>E %{x:.0f} m · N %{y:.0f} m" + ALT_HOVER + "<extra>" + name + "</extra>"))
         n_series += 1
@@ -693,6 +695,15 @@ def map_fig(A: dict, P: dict) -> go.Figure:
     _tid = f"#{A['tgt_tid']} " if A.get("tgt_tid") is not None else ""
     fig.add_annotation(xref="paper", yref="paper", x=1.0, y=1.0, xanchor="right", yanchor="bottom", xshift=-2, yshift=2, showarrow=False,
                        text=f"<b>{_tid}{_state}</b>", font=dict(family=T.MONO, size=font_px + 2, color=_col), bgcolor=TAG_BG, borderpad=2, name="track_status")
+    # 2026-09-17 pm: the INTERCEPTOR track's state beside it ("INT #203 COASTING"), only while there is interceptor truth to track against —
+    # sits LEFT of the target tag (mono type: ~0.62 em per glyph + the tag's padding) in ITS state colour.  Map only, never a metric.
+    if A.get("itc_state") and A.get("has_truth", True) and (A.get("itc_tid") is not None or A.get("itc_trail") is not None):
+        _istate = "TRACK CHANGED" if A.get("itc_flash") else _words.get(str(A.get("itc_state")), str(A.get("itc_state")))
+        _icol = {"ok": T.GREEN, "amber": T.AMBER, "fail": T.FAIL, "na": T.INK3}.get("amber" if A.get("itc_flash") else str(A.get("itc_cls") or "na"), T.INK3)
+        _itid = f"#{A['itc_tid']} " if A.get("itc_tid") is not None else ""
+        _tgt_w = int(len(f"{_tid}{_state}") * (font_px + 2) * 0.62) + 2 * 2 + 10
+        fig.add_annotation(xref="paper", yref="paper", x=1.0, y=1.0, xanchor="right", yanchor="bottom", xshift=-2 - _tgt_w, yshift=2, showarrow=False,
+                           text=f"<b>INT {_itid}{_istate}</b>", font=dict(family=T.MONO, size=font_px + 2, color=_icol), bgcolor=TAG_BG, borderpad=2, name="itc_status")
     # THE KEY NEVER SITS ON THE IMAGERY: one horizontal row in the top margin, bottom-anchored just above the plot area (paper y = 1),
     # under the hover modebar's own row (MAP_MODEBAR_PX) — the two can never collide and a wider key grows UP into that row, never down
     # over the map.  margin.autoexpand is OFF (map_margin) so the reserved room is EXACT: the legend's size can never move the plot
@@ -736,6 +747,10 @@ def trail_tails(A: dict) -> dict:
 
 # ── engagement: ONE separation card (the closing-rate figure was dropped; the rate lives on the tile) ──
 STAR_TRACK = dict(symbol="star", size=21, color=T.CARD, line=dict(width=2, color=T.TARGET))   # the track CPA ★: a target-red RING (the truth ★ stays gold)
+STAR_CLOSEST = dict(symbol="star-open", size=21, color=T.GOLD, line=dict(width=2, color=T.GOLD))          # "closest so far" (no validated pass yet): hollow gold ★
+STAR_CLOSEST_TRACK = dict(symbol="star-open", size=21, color=T.TARGET, line=dict(width=2, color=T.TARGET))  # ... and its track twin, hollow red
+CPA_LINE_W = 2.5                                                                                  # 2026-09-17 pm: the gold CPA hairline was 1 px — invisible beside the 1 px "now" line
+CPA_LABEL_PX = 14                                                                                 # the "CPA 28 m" text riding above each ★ (mono, ink)
 OUT_MARK = " ◂"                                                                                 # suffix of a CPA label pinned at the LEFT edge (its time scrolled out of the window)
 
 
@@ -759,17 +774,24 @@ def separation_fig(A: dict, P: dict) -> go.Figure:
                                  hovertemplate="%{y:.0f} m"))
     t_arr = np.asarray(S["t"], float)
     t0 = float(np.nanmin(t_arr)) if len(t_arr) and np.isfinite(t_arr).any() else float(A["t_now"]) - 60.0
-    for key, name, mk in (("cpa", "CPA", STAR), ("cpa_trk", "CPA track", STAR_TRACK)):
+    # 2026-09-17 pm ("make the CPA clearer"): each ★ carries its value ON the plot ("CPA 28 m" / "CPA track 41 m", ink on TAG_BG, above
+    # the star) and the truth CPA's gold hairline is CPA_LINE_W wide.  While NO pass has validated under the gate, the AIRBORNE "closest
+    # so far" minimum (A["cpa_run"] / A["cpa_trk_run"]) is marked instead — hollow ★, dotted hairline, "closest 131 m" — so the card
+    # always points at the nearest approach flown (a whole flight without a gate pass used to show nothing at all).
+    validated = A.get("cpa") is not None or A.get("cpa_trk") is not None
+    marks = ((("cpa", "CPA", STAR), ("cpa_trk", "CPA track", STAR_TRACK)) if validated
+             else (("cpa_run", "closest", STAR_CLOSEST), ("cpa_trk_run", "closest track", STAR_CLOSEST_TRACK)))
+    for key, name, mk in marks:
         cpa = A.get(key)
         if cpa is None:
             continue
-        # the ★ stays (data); its label moved OUT of the plot area into the card header (ih.liveserver "hud", see cpa_hud) — text over the
-        # newest samples covered the right side of the plot (t = now is what the operator watches)
         out = float(cpa[1]) < t0
-        fig.add_trace(go.Scatter(x=[_dt(t0 if out else cpa[1])], y=[cpa[0]], mode="markers", name=name + (OUT_MARK if out else ""), marker=dict(mk),
-                                 hovertemplate=f"{name} %{{y:.0f}} m · {D.pdt_hms(cpa[1])}<extra></extra>"))
-        if key == "cpa":
-            fig.add_vline(x=_dt(t0 if out else cpa[1]), line=dict(color=T.GOLD, width=1))
+        fig.add_trace(go.Scatter(x=[_dt(t0 if out else cpa[1])], y=[cpa[0]], mode="markers+text", name=name + (OUT_MARK if out else ""), marker=dict(mk),
+                                 text=[f"{name} {cpa[0]:.0f} m"], textposition="top center" if key in ("cpa", "cpa_run") else "bottom center",   # truth above its ★, track below: the two never overlap
+                                 textfont=dict(family=T.MONO, size=px(CPA_LABEL_PX, P), color=T.INK),
+                                 cliponaxis=False, hovertemplate=f"{name} %{{y:.0f}} m · {D.pdt_hms(cpa[1])}<extra></extra>"))
+        if key in ("cpa", "cpa_run"):
+            fig.add_vline(x=_dt(t0 if out else cpa[1]), line=dict(color=T.GOLD, width=CPA_LINE_W, dash="solid" if validated else "dot"))
     fig.add_vline(x=_dt(A["t_now"]), line=dict(color=T.RED, width=1))
     # X_PAD_FRAC right padding: an invisible anchor beyond "now" widens the autorange (the user's zoom still survives reacts: autorange stays autorange)
     fig.add_trace(go.Scatter(x=[_dt(float(A["t_now"]) + X_PAD_FRAC * max(60.0, float(A["t_now"]) - t0))], y=[0.0], mode="markers",
@@ -920,7 +942,7 @@ def cpa_marks(fig: go.Figure, A: dict, t_lo: float, t_now: float, rows: int, lab
     x = _dt(t_lo if out else cpa[1])
     for r in range(1, rows + 1):
         fig.add_shape(type="line", xref="x" if r == 1 else f"x{r}", yref="y domain" if r == 1 else f"y{r} domain", x0=x, x1=x, y0=0, y1=1,
-                      line=dict(color=T.GOLD, width=1), layer="above", name=f"cpa_line_{r}")
+                      line=dict(color=T.GOLD, width=CPA_LINE_W), layer="above", name=f"cpa_line_{r}")
     if labels_out is not None:
         labels_out.append((float(t_lo if out else cpa[1]), f"CPA {cpa[0]:.0f} m · {D.pdt_hms(cpa[1])}" + (OUT_MARK if out else ""), "cpa_label"))
 
@@ -1041,10 +1063,12 @@ def track_pills(A: dict, P: dict | None = None) -> list[dict]:
     """Map track-number pill: "#177" at the newest point of the TARGET's radar track, 13 px mono in PRIMARY INK on a CARD
     pill whose 2 px border carries the role colour (target red; AMBER for TRACK_FLASH_S after an id change) — text never
     wears a series colour, the mark beside it does — anchored up-right of the point so it never sits on the vehicle icon.
-    2026-09-17: the interceptor's radar track gets NO pill (hard rule: never shown).  Plotly annotation dicts: map_fig adds
-    them and the panel relayouts them every tick with the heads (the panel's "itc" pill slot simply stays hidden)."""
+    2026-09-17 pm: the interceptor's radar track gets its pill back ("#203", blue border, BELOW-right) with its state word when
+    not CONFIRMED — the map is the one place the interceptor track appears.  Plotly annotation dicts: map_fig adds them and the
+    panel relayouts them every tick with the heads (two DOM overlay slots: tgt / itc)."""
     out = []
-    for key, tid_key, col, flash_key, above in (("tgt_track", "tgt_tid", T.TARGET, "tgt_flash", True),):
+    for key, tid_key, col, flash_key, above in (("tgt_track", "tgt_tid", T.TARGET, "tgt_flash", True),
+                                                ("itc_track", "itc_tid", T.INTERCEPTOR, "itc_flash", False)):
         tk, tid = A.get(key), A.get(tid_key)
         if tk is None or not len(tk) or tid is None:
             continue
@@ -1052,7 +1076,7 @@ def track_pills(A: dict, P: dict | None = None) -> list[dict]:
         # the target's pill sits ABOVE-right of its point, the interceptor's BELOW-right: at the CPA both heads are within a few
         # pixels and the two pills used to overlap (the panel's depill only stacks them by 26 px — less than one pill box at the
         # X-Large text scale).  Opposite sides put 28 px + both boxes between them, whatever the text scale.
-        coasting = key == "tgt_track" and str(A.get("track_state")) == "COASTING"      # 2026-09-15: "a small annotation on the top-down plot when we are coasting"
+        coasting = str(A.get("track_state" if key == "tgt_track" else "itc_state")) == "COASTING"      # 2026-09-15: "a small annotation on the top-down plot when we are coasting"
         out.append(dict(name=f"pill_{key[:3]}", xref="x", yref="y", x=round(float(last[TK["E"]]), 1), y=round(float(last[TK["N"]]), 1),
                         text=f"#{int(tid)}" + (" · COASTING" if coasting else ""),
                         showarrow=False, font=dict(family=T.MONO, size=px(PILL_PX, P), color=T.AMBER if coasting else T.INK), bgcolor=T.CARD,
@@ -1195,7 +1219,13 @@ def cpa_hud(A: dict) -> str:
     passes — the label left the plot area (see separation_fig)."""
     cpa, trk = A.get("cpa"), A.get("cpa_trk")
     if cpa is None and trk is None:
-        return ""
+        # 2026-09-17 pm: no validated pass yet -> the header still names the AIRBORNE closest approach so far, and says why it is not a CPA
+        run = A.get("cpa_run")
+        if run is None:
+            return ""
+        gate = A.get("cpa_gate_m")
+        why = f" · no pass under {float(gate):.0f} m gate" if gate else ""
+        return f"closest so far {run[0]:.0f} m · {D.pdt_hms(run[1])}{why}"
     if cpa is None:
         return f"CPA truth — · CPA track {trk[0]:.0f} m · {D.pdt_hms(trk[1])}"
     t_c = D.pdt_hms(cpa[1])
@@ -1792,11 +1822,15 @@ def velocity_fig(A: dict, P: dict, window_s: float = 120.0, truth: np.ndarray | 
 
 
 # ── MEASUREMENT SPACE · truth, tracks & obs vs time (spa's track_charts quad, reskinned; BISTATIC range / rate) ──
-MEAS_KEYS = ("rng", "rr", "az", "el")
-MEAS_TITLE = {"rng": "BISTATIC RANGE (KM)", "rr": "BISTATIC RANGE RATE (M/S)", "az": "AZIMUTH (°)", "el": "ELEVATION (°)"}
-MEAS_AXIS = {"rng": "bistatic range (km)", "rr": "bistatic range rate (m/s)", "az": "azimuth (°)", "el": "elevation (°)"}
-MEAS_HOVER = {"rng": "%{y:.2f} km", "rr": "%{y:+.1f} m/s", "az": "%{y:.2f}°", "el": "%{y:.2f}°"}
-MEAS_MIN_HALF = {"rng": 0.6, "rr": 20.0, "az": 2.0, "el": 2.0}       # truth-envelope axis: smallest ± half span per panel (km, m/s, °, °)
+MEAS_KEYS = ("rng", "rr", "az", "el", "alt")                           # 2026-09-17 pm: + ALTITUDE (a full-width third row) — "add altitude in those panels"
+MEAS_TITLE = {"rng": "BISTATIC RANGE (KM)", "rr": "BISTATIC RANGE RATE (M/S)", "az": "AZIMUTH (°)", "el": "ELEVATION (°)", "alt": "ALTITUDE (M HAE)"}
+MEAS_AXIS = {"rng": "bistatic range (km)", "rr": "bistatic range rate (m/s)", "az": "azimuth (°)", "el": "elevation (°)", "alt": "altitude (m HAE)"}
+MEAS_HOVER = {"rng": "%{y:.2f} km", "rr": "%{y:+.1f} m/s", "az": "%{y:.2f}°", "el": "%{y:.2f}°", "alt": "%{y:.0f} m"}
+MEAS_MIN_HALF = {"rng": 0.6, "rr": 20.0, "az": 2.0, "el": 2.0, "alt": 30.0}   # truth-envelope axis: smallest ± half span per panel (km, m/s, °, °, m)
+MEAS_POS = {"rng": (1, 1), "rr": (1, 2), "az": (2, 1), "el": (2, 2), "alt": (3, 1)}   # the altitude row spans both columns
+MEAS_SPECS = [[{}, {}], [{}, {}], [{"colspan": 2}, None]]
+MEAS_ROLE_WORD = {"tgt": "target", "itc": "interceptor"}
+MEAS_ROLE_COLOR = {"tgt": T.TARGET, "itc": T.INTERCEPTOR}
 MEAS_PAD = 0.15                                                        # ... padded 15 % each way beyond the truth min / max
 # COLOUR = ROLE, IDENTITY WITHIN A ROLE = LIGHTNESS STEP + DASH + ID PILL (dataviz validator: no set of >= 2 extra hues passes
 # all-pairs beside the red / blue truths).  Ramps by order of appearance within a role: light / mid (= the truth hue) / dark;
@@ -1807,7 +1841,7 @@ RAMP_FOLD = "#8a8a8a"                                         # 4th+ concurrent 
 STEP_DASH = ("solid", "dash", "dot")                          # the second identity channel: dash by step (coasting = lighter, never a dash)
 TRACK_SLOTS = RAMP_TGT                                        # legacy name (tests): the target ramp
 TRACK_SLOT_FOLD = RAMP_FOLD
-MEAS_H = 520
+MEAS_H = 640                                                  # 2026-09-17 pm: three rows (was 520 for two)
 # ── the quad's PANEL GEOMETRY is never known exactly server-side (the iframe width, plotly's legend autoexpand and the
 # panel JS font bump all move it), so every placement decision below is taken against measured BOUNDS instead of a point
 # estimate: a bound can only be wrong in the direction that leaves MORE room, an estimate is wrong both ways (2026-09-14
@@ -1893,8 +1927,8 @@ def track_sides(tr: dict) -> tuple[np.ndarray, str]:
     """Per-sample SIDE of a measurement-space track ("tgt" | "itc" | "none") and its HOME side ("tgt" when it was
     ever target-side in the window, else "itc" / "free").  Uses the engine's role-independent on_tgt / on_itc
     arrays when present (a STOLEN track: target-side, then interceptor-side), else the role-dependent ``on``.
-    2026-09-17 hard rule: the quad never draws the interceptor's radar track — meas_fig SKIPS every track whose home
-    is "itc" and draws a stolen track's interceptor-side samples as departed ("none" style), never blue."""
+    meas_fig(role=…) draws ONE home side per figure (target figure: "tgt" + "free"; interceptor figure: "itc") and the span a
+    track spent on the other role's drone in the departed ("none") style."""
     n = len(tr["t"])
     side = np.full(n, "none", object)
     on_t, on_i = tr.get("on_tgt"), tr.get("on_itc")
@@ -2071,8 +2105,13 @@ def meas_ticks(lo: float, hi: float, panel_h: float = MEAS_PANEL_MIN_H, font_px:
     return thin_ticks(vel_ticks(float(lo), float(hi)), float(lo), float(hi), float(panel_h), float(font_px))
 
 
-def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
-    """2×2 quad (BISTATIC range km · BISTATIC range rate m/s · azimuth ° · elevation °): TRUTH = target truth
+def meas_fig(M: dict, A: dict, P: dict, role: str = "tgt") -> go.Figure:
+    """ONE ROLE per figure (2026-09-17 pm user: "just target track vs. target truth ... another minimized panel for interceptor
+    truth vs. interceptor track, but dont put them on the same plots"): ``role`` "tgt" = the TARGET's truth (red) + the
+    target-side radar tracks (+ free / ungraded tracks and the raw obs); "itc" = the INTERCEPTOR's truth (blue) + the
+    interceptor-side radar track only (no obs: they are gated to the target).  Panels: BISTATIC range km · BISTATIC range
+    rate m/s · azimuth ° · elevation ° · ALTITUDE m HAE (a full-width third row).  Legacy text follows.
+    2×2 quad (BISTATIC range km · BISTATIC range rate m/s · azimuth ° · elevation °): TRUTH = target truth
     3 px target red + interceptor truth 3 px interceptor blue; TRACKS = every target-side track in the
     window, one colour per id by first appearance (dataviz slots, blue reserved), drawn per sample: ON-TARGET
     (M track "on": < 150 m from the target truth and closer to it than to the interceptor) as the full 2 px
@@ -2088,9 +2127,16 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
     groups TRUTH / TRACKS / OBS."""
     height = int(P.get("meas_height", MEAS_H))
     pill_px, title_px, small_px = px(PILL_PX, P), px(MEAS_TITLE_PX, P), px(11, P)
-    fig = make_subplots(rows=2, cols=2, shared_xaxes=True, horizontal_spacing=0.06, vertical_spacing=0.12)
-    pos = {"rng": (1, 1), "rr": (1, 2), "az": (2, 1), "el": (2, 2)}
-    truth, truth_itc, obs = M.get("truth"), M.get("truth_itc"), M.get("obs")
+    role = "itc" if role == "itc" else "tgt"
+    fig = make_subplots(rows=3, cols=2, specs=MEAS_SPECS, shared_xaxes=True, horizontal_spacing=0.06, vertical_spacing=0.09)
+    pos = MEAS_POS
+    truth = M.get("truth") if role == "tgt" else M.get("truth_itc")          # THIS role's truth only — the other role never enters the figure
+    obs = M.get("obs") if role == "tgt" else None                            # obs are gated to the target: none on the interceptor figure
+    role_word, role_col = MEAS_ROLE_WORD[role], MEAS_ROLE_COLOR[role]
+    def home_ok(h, side_=None):                                              # this card draws: its own home side (+ free / ungraded on the target card) and any track with
+        if h == role or (role == "tgt" and h == "free"):                     # samples ON this role's drone (a STOLEN target track rides the interceptor card for its stolen span)
+            return True
+        return side_ is not None and bool((np.asarray(side_) == role).any())
     cpa = A.get("cpa")
     t_lo, t_now = float(M["t_lo"]), float(M["t_now"])
     span = max(1e-9, t_now - t_lo)
@@ -2117,7 +2163,7 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
         first = key == "rng"
         n_before = len(fig.data)
         # 1. OBS first (underneath everything); range rate only when the obs carry one (live amb_dop / bistatic rate)
-        if obs is not None and len(obs["t"]) and (key != "rr" or M.get("obs_rr")):
+        if obs is not None and len(obs["t"]) and key != "alt" and (key != "rr" or M.get("obs_rr")):
             yo = _meas_val(obs, key)
             fig.add_trace(go.Scatter(x=D.to_pdt_dt64(obs["t"]), y=yo, mode="markers", name="raw obs", legendgroup="obs", showlegend=first,
                                      legendgrouptitle_text="OBS" if first else None,
@@ -2125,7 +2171,7 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                                      opacity=MEAS_OBS_ALPHA, hoverinfo="skip"), row=r, col=c)
         # 2. TRACKS: per-sample SIDE — target-side (slot colour, full), interceptor-side (blue dashed: a STOLEN track now
         #    rides the interceptor), neither (thin .35 = departed / dragged away); dotted = tentative / coasting; one legend entry per track
-        rng_ = truth_envelope([truth, truth_itc], key)
+        rng_ = truth_envelope([truth], key)
         ranges[key] = rng_
         for tr in tracks:
             y = _meas_val(tr, key)
@@ -2133,9 +2179,13 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                 continue
             t = np.asarray(tr["t"], float)
             side, home = track_sides(tr)
-            if home == "itc":                                   # 2026-09-17 hard rule: the interceptor's own radar track is never drawn
+            if not home_ok(home, side):                         # the OTHER role's track belongs to the other figure
                 continue
-            side = np.where(side == "itc", "none", side)        # a stolen track's interceptor-side span: departed style, never blue
+            other = "itc" if role == "tgt" else "tgt"
+            if home == role or home == "free":
+                side = np.where(side == other, "none", side)    # own track: the span spent on the other role's drone reads as departed
+            else:
+                side = np.where(side == role, side, "skip")     # a borrowed (stolen) track: ONLY the samples on this role's drone — never the other role's span on this card
             kind = np.asarray(tr.get("kind", np.full(len(t), "meas", object)), object)
             meas = kind == "meas"
             dt = np.diff(t) if len(t) > 1 else np.zeros(0)
@@ -2143,7 +2193,7 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
             tid = tr["tid"]
             c_tgt, c_itc, dash = track_style(step_of.get(tid, 0))
             col_home = T.GREY_TRACK if home == "free" else (c_itc if home == "itc" else c_tgt)
-            name = f"#{tid} · " + {"tgt": "target", "itc": "interceptor", "free": free_word}[home]
+            name = f"#{tid} · " + ({"tgt": "target", "itc": "interceptor", "free": free_word}[home] if home in (role, "free") else f"{role_word} (stolen)")
             grp = f"trk{tid}"
             shown = False
             for cat, coasting in (("none", True), ("none", False), ("itc", True), ("itc", False), ("tgt", True), ("tgt", False)):   # z-order: departed → interceptor-side → target-side
@@ -2174,7 +2224,7 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                                          line=dict(color=col_home, width=ON_W, dash=dash)), row=r, col=c)
             # off-scale indicator: samples outside the truth envelope are clipped by the axis -> ▲ / ▼ at the edge, count in hover
             if rng_ is not None:
-                fin = np.isfinite(y)
+                fin = np.isfinite(y) & (side != "skip")            # a borrowed track's hidden (other-role) samples never raise the off-scale arrows
                 for sym, m_off, yy, anch in (("▲", fin & (y > rng_[1]), 1.0, "top"), ("▼", fin & (y < rng_[0]), 0.0, "bottom")):
                     if m_off.any():
                         i = int(np.flatnonzero(m_off)[0])
@@ -2186,8 +2236,8 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                         nm = f"off_{key}_{tid}_{'up' if sym == '▲' else 'dn'}"
                         tags[key].append(_tag_rec(nm, sym, small_px, t[i], 0.0, t_lo, span, None,
                                                   band="top" if sym == "▲" else "bottom"))   # an EDGE-anchored obstacle: a pill must clear it
-        # 3. TRUTH on top of the tracks: target red, interceptor blue, 3 px
-        for series, col, name, ttl in ((truth, T.TARGET, "target truth", "TRUTH"), (truth_itc, T.INTERCEPTOR, "interceptor truth", None)):
+        # 3. TRUTH on top of the tracks: this role's truth only (target red / interceptor blue), 3 px
+        for series, col, name, ttl in ((truth, role_col, f"{role_word} truth", "TRUTH"),):
             if series is not None and len(series["t"]):
                 y = _meas_val(series, key)
                 if y is not None and np.isfinite(y).any():
@@ -2202,9 +2252,9 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                 continue
             t = np.asarray(tr["t"], float)
             side, home = track_sides(tr)
-            if home == "itc":                                   # 2026-09-17 hard rule: no marker / pill for the interceptor's radar track
+            if not home_ok(home, side):
                 continue
-            on = (side == "tgt") & np.isfinite(y) if home != "free" else np.isfinite(y)
+            on = (side == role) & np.isfinite(y) if home != "free" else np.isfinite(y)
             if not on.any():
                 continue
             tid = tr["tid"]
@@ -2214,7 +2264,7 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
             idx = np.flatnonzero(on)
             i0, i1 = int(idx[0]), int(idx[-1])
             x0_, x1_ = _dt(t[i0]), _dt(t[i1])
-            name = f"#{tid} · " + {"tgt": "target", "itc": "interceptor", "free": free_word}[home]
+            name = f"#{tid} · " + ({"tgt": "target", "itc": "interceptor", "free": free_word}[home] if home in (role, "free") else f"{role_word} (stolen)")
             fig.add_trace(go.Scatter(x=[x0_], y=[y[i0]], mode="markers", name=f"{name} start", legendgroup=grp, showlegend=False,
                                      marker=dict(symbol="star", size=11, color=col, line=dict(width=2, color=T.CARD)),
                                      hovertemplate=f"#{tid} starts here<extra></extra>"), row=r, col=c)   # the id is in the hover too: a pill the declutter had to drop loses nothing
@@ -2240,7 +2290,7 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                     tags[key].append(_tag_rec(nm, f"#{tid}", pill_px, t[i1], float(y[i1]), t_lo, span, rng_,
                                               xshift=-10 if right else 10, right=right, prio=1))   # the END pill is the first thing dropped when a cluster will not fit
             after = np.flatnonzero(np.isfinite(y[i1 + 1:])) + i1 + 1
-            if len(after):   # the track continues after its last on-side sample: the departure point
+            if len(after) and home in (role, "free"):   # the track continues after its last on-side sample: the departure point (own tracks only)
                 j = int(after[0])
                 stolen = home == "tgt" and bool((side[j:] == "itc").any())
                 word = "→ interceptor (stolen)" if stolen else "→ departed"
@@ -2271,10 +2321,10 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                                               band="bottom", full_width=True))
     # track-id changes inside the window: a tick at the top edge of all four panels, labelled on the top row.  Drawn
     # BEFORE the declutter so its hover-only ▾ mark at the top edge is an obstacle the pills have to clear.
-    handover_marks(fig, A.get("track_events"), t_lo, t_now, [pos[MEAS_KEYS[0]]], {pos[MEAS_KEYS[0]]}, P)   # first panel only (2026-09-14)
+    handover_marks(fig, A.get("track_events"), t_lo, t_now, [pos[MEAS_KEYS[0]]], {pos[MEAS_KEYS[0]]}, P, roles=(role_word,))   # first panel only (2026-09-14); this role's handovers
     for e in A.get("track_events") or ():
         et, erole, _old, enew, _ = _ev(e)
-        if enew is not None and t_lo <= et <= t_now and erole == "target":          # 2026-09-17: interceptor-track handovers are never shown
+        if enew is not None and t_lo <= et <= t_now and erole == role_word:         # this role's handovers only
             tags[MEAS_KEYS[0]].append(_tag_rec(f"handover_tag_{erole}_{enew}", "▾", max(9, px(TICK_PX, P) - 2), et, 0.0, t_lo, span, None, band="top"))
     # HEADER-STRIP tags: the departures, newest first, right-aligned beside the panel title (never in the plot area)
     for key in MEAS_KEYS:
@@ -2295,7 +2345,9 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                 fig.update_annotations(patch={"visible": False}, selector={"name": nm})
             else:
                 fig.update_annotations(patch={"yanchor": sl["yanchor"], "yshift": sl["yshift"]}, selector={"name": nm})
-    base_layout(fig, height=height, uirevision=MEAS_UIREV, legend=True, time_x=True, unified=True, margin=MEAS_MARGIN, font_px=int(P.get("font_px", FONT_PX)))
+    base_layout(fig, height=height, uirevision=UIREV["meas" if role == "tgt" else "meas_itc"], legend=True, time_x=True, unified=True, margin=MEAS_MARGIN, font_px=int(P.get("font_px", FONT_PX)))
+    for r_, c_ in ((1, 1), (1, 2), (2, 1), (2, 2)):          # the full-width altitude row carries the one time axis: rows 1-2 show no tick labels / title (their ticks sat under the altitude title)
+        fig.update_xaxes(showticklabels=False, title_text="", row=r_, col=c_)
     leg_px = max(px(MEAS_LEGEND_PX, P), int(P.get("font_px", FONT_PX)))
     fig.update_layout(legend=dict(y=1.0, yanchor="bottom", x=0.0, font=dict(size=leg_px), grouptitlefont=dict(family=T.MONO, size=leg_px, color=T.INK3)),
                       modebar=dict(remove=list(MAP_MODEBAR_DROP), bgcolor="rgba(0,0,0,0)", color=T.INK3, activecolor=T.INK),   # a shorter modebar: the legend's last row ran under its buttons
@@ -2311,6 +2363,5 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
             lo_, hi_ = float(ranges[key][0]), float(ranges[key][1])
             fig.update_yaxes(range=[lo_, hi_], tickvals=meas_ticks(lo_, hi_, MEAS_PANEL_MIN_H, tick_px), row=r, col=c)
         fig.update_xaxes(range=[_dt(t_lo), _dt(t_now)], row=r, col=c)
-    fig.update_xaxes(title_text="time (PDT)", row=2, col=1)
-    fig.update_xaxes(title_text="time (PDT)", row=2, col=2)
+    fig.update_xaxes(title_text="time (PDT)", row=3, col=1)   # the one time axis: the full-width altitude row (rows 1-2 carry no tick labels / title)
     return fig

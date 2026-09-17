@@ -1069,7 +1069,7 @@ def meas_space(snap: dict, A: dict, window_s: float) -> dict:
             return None
         az, el, rng_m, _ = aer_rr(w[:, TR["E"]], w[:, TR["N"]], w[:, TR["U"]])
         rng, rr = bistatic_series(w[:, TR["E"]], w[:, TR["N"]], w[:, TR["U"]], w[:, TR["vE"]], w[:, TR["vN"]], w[:, TR["vU"]], tx_enu)
-        return {"t": w[:, 0], "az": az, "el": el, "rng": rng, "rr": rr, "rng_mono": rng_m}
+        return {"t": w[:, 0], "az": az, "el": el, "rng": rng, "rr": rr, "rng_mono": rng_m, "alt": w[:, TR["U"]] + float(ant[2])}   # 2026-09-17 pm: altitude row (m HAE)
 
     out["truth"], out["truth_itc"] = truth_series(Tt), truth_series(Ti)
     tracks = snap.get("tracks") or {}
@@ -1116,7 +1116,7 @@ def meas_space(snap: dict, A: dict, window_s: float) -> dict:
         else:
             on = np.ones(len(w), bool)
         out["tracks"].append({"tid": int(tid), "role": role, "t": w[:, 0], "az": az, "el": el, "rng": rng, "rr": rr, "on": on,
-                              "on_tgt": on_tgt, "on_itc": on_itc, "kind": state_kind(w)})
+                              "on_tgt": on_tgt, "on_itc": on_itc, "kind": state_kind(w), "alt": w[:, TK["U"]] + float(ant[2])})
     obs = snap.get("obs")
     if obs is not None and len(obs):
         o = np.asarray(obs, float)
@@ -1432,6 +1432,22 @@ def analyze(snap: dict, params: dict) -> dict:
             A["track_state"], A["track_cls"] = "COASTING", "amber" if age < 5 else "fail"
         else:
             A["track_state"], A["track_cls"] = "CONFIRMED", "ok"
+    # the INTERCEPTOR track's state words — for the MAP ONLY (its pill + the top-row tag): 2026-09-17 pm user: "still want to see
+    # interceptor track state in the replay and live, just not in the altitude plot or metric comparisons".  Same rule as the
+    # target's; NO TRACK when nothing is in the interceptor's gate.  Never fed to the error / velocity / separation cards or the metrics.
+    ik = A.get("itc_track")
+    if ik is None or not len(ik):
+        A["itc_state"], A["itc_cls"], A["itc_update_age"] = ("NO TRACK", "fail", None) if A.get("has_truth") else ("NO TRUTH FEED", "fail", None)
+    else:
+        i_last = ik[-1]
+        i_age = t_now - float(i_last[TK["lu"]])
+        A["itc_update_age"] = i_age
+        if int(i_last[TK["state"]]) == 1:
+            A["itc_state"], A["itc_cls"] = "TENTATIVE", "amber"
+        elif i_age > D.FRESH_S:
+            A["itc_state"], A["itc_cls"] = "COASTING", "amber" if i_age < 5 else "fail"
+        else:
+            A["itc_state"], A["itc_cls"] = "CONFIRMED", "ok"
     # the target track's own published-state history over the METRICS window W (the status-line counter beside the
     # track id): conf / tent / coast counts + the track's update rate in Hz — raw rows, independent of grading
     A["tgt_counts"] = state_counts(tk, t_now, W)

@@ -180,7 +180,7 @@ def test_cpa_marked_on_every_error_and_velocity_card():
         gold = [s for s in L["shapes"] if str(s.get("name") or "").startswith("cpa_line_")]
         assert sorted(s["name"] for s in gold) == [f"cpa_line_{r}" for r in range(1, rows + 1)], gold   # one per card
         for r, s in enumerate(sorted(gold, key=lambda sh: sh["name"]), start=1):
-            assert s["line"]["color"] == T.GOLD and s["line"]["width"] == 1 and s["layer"] == "above"
+            assert s["line"]["color"] == T.GOLD and s["line"]["width"] == PL.CPA_LINE_W == 2.5 and s["layer"] == "above"   # 2026-09-17 pm: "make the CPA clearer"
             assert s["xref"] == ("x" if r == 1 else f"x{r}") and s["yref"] == ("y domain" if r == 1 else f"y{r} domain")
             assert (s["y0"], s["y1"]) == (0, 1) and _ts(s["x0"]) == _ts(s["x1"]) == _ts(PL._dt(t_cpa))   # full card height, at the CPA time
         assert all(str(s.get("name") or "").startswith(("handover_", "cpa_line_")) for s in _vlines(fig))   # still nothing unlabelled / at "now"
