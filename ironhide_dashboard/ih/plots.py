@@ -776,9 +776,10 @@ def separation_fig(A: dict, P: dict) -> go.Figure:
     # truth CPA, target-red dashed "CPA track 230 m" for the track CPA, the words at the top of each line (ink on TAG_BG, the track's one row lower
     # so the two never overlap when the times coincide).  While NO pass has validated under the gate the AIRBORNE closest-so-far (A["cpa_run"] /
     # A["cpa_trk_run"]) is drawn the same way and with the same word — the card always points at the nearest approach flown.
-    validated = A.get("cpa") is not None or A.get("cpa_trk") is not None
-    marks = ((("cpa", "CPA", T.GOLD, "solid"), ("cpa_trk", "CPA track", T.TARGET, "dash")) if validated
-             else (("cpa_run", "CPA", T.GOLD, "solid"), ("cpa_trk_run", "CPA track", T.TARGET, "dash")))
+    # 2026-09-17 pm (user: "CPA is CPA - dont track or truth or anything"): ONE line, ONE word — the truth CPA (interceptor truth <-> target
+    # truth, 3D); the track CPA stays a number in the More-details tiles, never a second line here
+    validated = A.get("cpa") is not None
+    marks = (("cpa", "CPA", T.GOLD, "solid"),) if validated else (("cpa_run", "CPA", T.GOLD, "solid"),)
     lab_px = px(CPA_LABEL_PX, P)
     for slot, (key, name, col, dash) in enumerate(marks):
         cpa = A.get(key)
@@ -1212,25 +1213,12 @@ def err_strip_px(readout_px: int, sub_px: int) -> tuple[int, int]:
 
 
 def cpa_hud(A: dict) -> str:
-    """The separation card's header text once EITHER CPA is validated: "CPA truth 28 m · CPA track 41 m · 06:55:48" (one time when
-    both fall in the same second; the track value carries its own time when it differs: "CPA truth 28 m · 06:55:48 · CPA track
-    20 m · 06:55:50"); "CPA track —" while no target track spanned the pass, "CPA truth —" for a track-only CPA; '' until a gate
-    passes — the label left the plot area (see separation_fig)."""
-    cpa, trk = A.get("cpa"), A.get("cpa_trk")
-    if cpa is None and trk is None:
-        # 2026-09-17 pm: no validated pass yet -> the header carries the AIRBORNE closest approach so far in the SAME words (user: "just CPA")
-        cpa, trk = A.get("cpa_run"), A.get("cpa_trk_run")
-        if cpa is None and trk is None:
-            return ""
+    """The separation card's header words: "CPA 202 m · 07:14:15" — the truth CPA once a pass validates, else the AIRBORNE closest approach so
+    far in the same words (2026-09-17 pm user: "CPA is CPA - dont track or truth or anything"); '' with nothing yet."""
+    cpa = A.get("cpa") if A.get("cpa") is not None else A.get("cpa_run")
     if cpa is None:
-        return f"CPA truth — · CPA track {trk[0]:.0f} m · {D.pdt_hms(trk[1])}"
-    t_c = D.pdt_hms(cpa[1])
-    if trk is None:
-        return f"CPA truth {cpa[0]:.0f} m · CPA track — · {t_c}"
-    t_k = D.pdt_hms(trk[1])
-    if t_k == t_c:
-        return f"CPA truth {cpa[0]:.0f} m · CPA track {trk[0]:.0f} m · {t_c}"
-    return f"CPA truth {cpa[0]:.0f} m · {t_c} · CPA track {trk[0]:.0f} m · {t_k}"
+        return ""
+    return f"CPA {cpa[0]:.0f} m · {D.pdt_hms(cpa[1])}"
 
 
 def contain_text(c: dict | None) -> str:
@@ -1833,9 +1821,11 @@ MEAS_PAD = 0.15                                                        # ... pad
 # a 4th concurrent track of a role folds to grey.  Ordinal checks pass (ΔL >= .06; red light end >= 3:1 on the card).
 RAMP_TGT = ("#f3a6a6", T.TARGET, T.TARGET_DARK)              # target-side tracks: light · mid · dark red
 RAMP_ITC = ("#8fb8f0", T.INTERCEPTOR, "#2a6cc7")              # interceptor-side tracks: light · mid · dark blue (dark step 3.27:1 on the card; #1c5cab was 2.55:1)
+RAMP_TRACK = (T.INK, T.INK2, "#c9a24a")                        # 2026-09-17 pm MEASUREMENT cards: tracks in INK (white · grey · a muted gold third step), DASHED — the role
+                                                              # colour is the TRUTH's alone (user: "impossible to see from line thickness and colors"); same convention as the velocity card
 RAMP_FOLD = "#8a8a8a"                                         # 4th+ concurrent track of a role
 STEP_DASH = ("dash", "longdash", "dot")                       # 2026-09-17 pm (user: "clearer with dashed line and solid lines"): TRACKS are always dashed, TRUTH is the solid line; the step still varies the dash
-TRACK_SLOTS = RAMP_TGT                                        # legacy name (tests): the target ramp
+TRACK_SLOTS = RAMP_TRACK                                      # legacy name (tests): the measurement-card track ramp (2026-09-17 pm: ink)
 TRACK_SLOT_FOLD = RAMP_FOLD
 MEAS_H = 640                                                  # 2026-09-17 pm: three rows (was 520 for two)
 # ── the quad's PANEL GEOMETRY is never known exactly server-side (the iframe width, plotly's legend autoexpand and the
@@ -1855,7 +1845,7 @@ MEAS_MARGIN = dict(l=56, r=12, t=30, b=30)
 MEAS_TOP_PX = 72                                              # top margin: the legend rows above the top-row subplot titles (titles sit ABOVE their plot areas, never over a track pill)
 MEAS_UIREV = UIREV["meas"]
 MEAS_OBS_PX, MEAS_OBS_COLOR, MEAS_OBS_ALPHA = 6, "#cfd6de", 0.75     # raw obs: filled 6 px light-ink circles at .75 with a 1 px surface ring, drawn FIRST
-TRUTH_W = 3.0                                                 # both truths: 3 px (target red, interceptor blue)
+TRUTH_W = 4.5                                                 # the truth: 4.5 px SOLID in the role colour (2026-09-17 pm, was 3) — the one thick coloured line on the card
 ON_W, DEPARTED_W, DEPARTED_ALPHA = 2.5, 1.0, 0.35             # a track ON its side: 2.5 px dashed ramp colour (2026-09-17 pm, was 2); DEPARTED (dragged away): 1 px at .35
 COAST_ALPHA = 0.6                                             # tentative / coasting samples of a track: same line, lighter (like the error panel)
 MEAS_TITLE_PX, MEAS_LEGEND_PX = 12, 12                        # per-panel titles (bold) and the legend: 12 px
@@ -1869,8 +1859,26 @@ def track_slot(i: int, role: str = "tgt") -> str:
 
 
 def track_style(step: int) -> tuple[str, str, str]:
-    """(target-side colour, interceptor-side colour, dash) of a track at appearance step ``step`` within its role."""
-    return track_slot(step, "tgt"), track_slot(step, "itc"), STEP_DASH[min(step, len(STEP_DASH) - 1)]
+    """(target-side colour, interceptor-side colour, dash) of a MEASUREMENT-card track at appearance step ``step``: both sides the
+    INK ramp (RAMP_TRACK) — on these cards the card itself names the role and the truth alone wears the role colour — and a dash pattern
+    by step (tracks are always dashed)."""
+    c = RAMP_TRACK[min(step, len(RAMP_TRACK) - 1)]
+    return c, c, STEP_DASH[min(step, len(STEP_DASH) - 1)]
+
+
+def meas_envelope(truth, tracks: list, key: str, role: str = "tgt") -> tuple[float, float] | None:
+    """A measurement panel's y-range: the truth envelope WIDENED by every track sample ON this role's drone (side == role; a departed /
+    stolen-away span never counts) — 2026-09-17 pm user: "the lines are off the plot for axis sizing".  Same padding / floors as truth_envelope."""
+    extra = []
+    for tr in tracks:
+        y = _meas_val(tr, key)
+        if y is None:
+            continue
+        side, home = track_sides(tr)
+        on = np.isfinite(y) & ((side == role) if home != "free" else True)
+        if on.any():
+            extra.append({key: (y[on] * 1000.0) if key == "rng" else y[on]})   # _meas_val re-scales rng: hand it metres back
+    return truth_envelope([truth] + extra, key)
 
 
 def _meas_val(series: dict, key: str) -> np.ndarray | None:
@@ -2167,7 +2175,7 @@ def meas_fig(M: dict, A: dict, P: dict, role: str = "tgt") -> go.Figure:
                                      opacity=MEAS_OBS_ALPHA, hoverinfo="skip"), row=r, col=c)
         # 2. TRACKS: per-sample SIDE — target-side (slot colour, full), interceptor-side (blue dashed: a STOLEN track now
         #    rides the interceptor), neither (thin .35 = departed / dragged away); dotted = tentative / coasting; one legend entry per track
-        rng_ = truth_envelope([truth], key)
+        rng_ = meas_envelope(truth, [tr for tr in tracks if home_ok(*track_sides(tr)[::-1])], key, role)   # truth ∪ this role's on-side track samples
         ranges[key] = rng_
         for tr in tracks:
             y = _meas_val(tr, key)
@@ -2188,7 +2196,7 @@ def meas_fig(M: dict, A: dict, P: dict, role: str = "tgt") -> go.Figure:
             gap = max(MEAS_GAP_S, GAP_FACTOR * float(np.median(dt))) if len(dt) else MEAS_GAP_S
             tid = tr["tid"]
             c_tgt, c_itc, dash = track_style(step_of.get(tid, 0))
-            col_home = T.GREY_TRACK if home == "free" else (c_itc if home == "itc" else c_tgt)
+            col_home = T.GREY_TRACK if home == "free" else c_tgt          # ink ramp (track_style): the role colour is the truth's
             name = f"#{tid} · " + ({"tgt": "target", "itc": "interceptor", "free": free_word}[home] if home in (role, "free") else f"{role_word} (stolen)")
             grp = f"trk{tid}"
             shown = False
@@ -2255,7 +2263,7 @@ def meas_fig(M: dict, A: dict, P: dict, role: str = "tgt") -> go.Figure:
                 continue
             tid = tr["tid"]
             c_tgt, c_itc, _dash = track_style(step_of.get(tid, 0))
-            col = T.GREY_TRACK if home == "free" else (c_itc if home == "itc" else c_tgt)
+            col = T.GREY_TRACK if home == "free" else c_tgt
             grp = f"trk{tid}"
             idx = np.flatnonzero(on)
             i0, i1 = int(idx[0]), int(idx[-1])

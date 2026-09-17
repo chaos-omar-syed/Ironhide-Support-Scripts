@@ -227,7 +227,7 @@ def test_f_palette_entities_ramps_status_and_track_colours_come_from_the_ramps()
     # the figures: track colours come ONLY from the ramps (+ fold grey; the map's ungraded "radar" tracks are the de-emphasis grey)
     _, figs, _ = _live(F1_LATE)
     meas_tracks = [t for t in figs["meas"]["data"] if (t.get("name") or "").startswith("#") and t.get("line")]
-    assert meas_tracks and {t["line"]["color"] for t in meas_tracks} <= set(PL.RAMP_TGT) | set(PL.RAMP_ITC) | {PL.RAMP_FOLD}
+    assert meas_tracks and {t["line"]["color"] for t in meas_tracks} <= set(PL.RAMP_TRACK) | {PL.RAMP_FOLD, T.GREY_TRACK}   # 2026-09-17 pm: ink ramp, dashed (the truth wears the role colour)
     assert {t["line"]["dash"] for t in meas_tracks} <= set(PL.STEP_DASH)
     map_tracks = [t for t in figs["map"]["data"] if "track" in (t.get("name") or "") and t.get("line") and not (t.get("name") or "").startswith("_halo")]   # 2026-09-17: the halo is not a series
     assert map_tracks and {t["line"]["color"] for t in map_tracks} <= set(PL.RAMP_TGT) | set(PL.RAMP_ITC) | {PL.RAMP_FOLD, T.GREY_TRACK}

@@ -174,7 +174,7 @@ def test_cpa_marked_on_every_error_and_velocity_card():
     "tick_labels"), never over the data.  PL.cpa_hud still feeds the separation card's header HUD."""
     t_cpa = T_NOW - 50.0
     A_e, A_v = _A_err(cpa_t=t_cpa), _A_vel(cpa_t=t_cpa)
-    assert PL.cpa_hud(A_e) == PL.cpa_hud(A_v) == f"CPA truth 59 m · CPA track — · {D.pdt_hms(t_cpa)}"   # 2026-09-17: two CPAs in the HUD (no track CPA in these fixtures)
+    assert PL.cpa_hud(A_e) == PL.cpa_hud(A_v) == f"CPA 59 m · {D.pdt_hms(t_cpa)}"   # 2026-09-17: two CPAs in the HUD (no track CPA in these fixtures)
     for fig, rows in ((PL.error_fig(A_e, P_ERR, WIN), 4), (PL.velocity_fig(A_v, P_VEL, WIN, truth=_truth()), 3)):
         L = _L(fig)
         gold = [s for s in L["shapes"] if str(s.get("name") or "").startswith("cpa_line_")]
@@ -373,17 +373,14 @@ def test_bare_mode_07_23_52_labels_widths_ranges():
     fe = PL.error_fig(A, {**P, "err_height": 547, "font_px": 14, "line_w": 2.5}, 120.0)
     fv = PL.velocity_fig(A, {**P, "vel_height": 400, "font_px": 14, "line_w": 2.5}, 120.0, truth=snap["tgt"])
     # 2026-09-17: the HUD names both CPAs — truth 53 m @ 07:23:47 and the track CPA (interceptor truth <-> target track #177) 36 m @ 07:23:48
-    assert PL.cpa_hud(A).startswith(f"CPA truth {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])} · CPA track ")
+    assert PL.cpa_hud(A) == f"CPA {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])}"   # 2026-09-17 pm: one CPA, one word
     assert A["cpa_trk"] is not None and abs(A["cpa_trk"][0] - 36.3) < 0.6 and D.pdt_hms(A["cpa_trk"][1]) == "07:23:48"
-    assert PL.cpa_hud(A) == f"CPA truth {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])} · CPA track {A['cpa_trk'][0]:.0f} m · {D.pdt_hms(A['cpa_trk'][1])}"
     fs = PL.separation_fig(A, {**P, "sep_height": 240})
     names = [t.name for t in fs.data]
     assert names[:2] == ["separation to truth", "separation to track"] and "CPA" not in names and "horizontal" not in names   # 2026-09-17 pm: CPA = labelled lines, no marker traces
     shp = {sh.name for sh in fs.layout.shapes if sh.name}
     labs = {a.text for a in fs.layout.annotations if str(a.name or "").endswith("_label")}
-    assert {"cpa_line", "cpa_trk_line"} <= shp and labs == {f"CPA {A['cpa'][0]:.0f} m", f"CPA track {A['cpa_trk'][0]:.0f} m"}, (shp, labs)
-    trk_line = next(s for s in fs.layout.shapes if s.name == "cpa_trk_line")
-    assert trk_line.line.color == T.TARGET and trk_line.line.dash == "dash" and trk_line.line.width == PL.CPA_LINE_W   # target-red dashed line (2026-09-17 pm: no stars)
+    assert "cpa_line" in shp and "cpa_trk_line" not in shp and labs == {f"CPA {A['cpa'][0]:.0f} m"}, (shp, labs)   # ONE gold CPA line, one word (2026-09-17 pm)
     assert next(t for t in fs.data if t.name == "separation to track").line.dash == "dash"
     assert len([s for s in _L(fs)["shapes"] if (s.get("line") or {}).get("color") == T.GOLD]) == 1                # one gold hairline (truth); none for the track CPA
     in_win = (A["t_now"] - 120.0) <= float(A["cpa"][1]) <= A["t_now"]

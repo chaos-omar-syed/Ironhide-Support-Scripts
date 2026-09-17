@@ -430,11 +430,11 @@ def test_f1_track_cpa_pair_rides_the_target_track_and_the_hud_names_both():
     assert A["cpa_trk_valid"] and A["cpa_trk_run"] == A["cpa_trk"] == E._BARE_STATE["cpa_trk_ok"] == E._BARE_STATE["cpa_trk_run"]
     S = A["sep"]
     assert len(S["sep_trk"]) == len(S["t"]) == len(S["trk"]) and np.isfinite(S["sep_trk"]).any() and A["sep_trk_now"] is not None
-    assert PL.cpa_hud(A) == "CPA truth 59 m · 07:22:31 · CPA track 60 m · 07:22:30"
+    assert PL.cpa_hud(A) == "CPA 59 m · 07:22:31"   # 2026-09-17 pm: one CPA, one word (the track CPA stays a tile number)
     E._BARE_STATE.clear()
     A = E.analyze(_f1_snap("07:22:00"), dict(P, cpa_gate_m=100.0))
     assert A["cpa"] is not None and A["cpa_trk"] is None and A["cpa_trk_run"] is not None and A["cpa_trk_run"][0] > 100.0
-    assert PL.cpa_hud(A) == "CPA truth 78 m · CPA track — · 07:21:43"
+    assert PL.cpa_hud(A) == "CPA 78 m · 07:21:43"
 
 
 def test_history_seed_seeds_both_pairs_once_per_rev_and_again_after_a_reset():

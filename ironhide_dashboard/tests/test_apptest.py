@@ -565,7 +565,7 @@ def test_live_figures_follow_mark_and_chrome_spec():
                 elif name == "interceptor truth":
                     assert t["line"] == {"color": T.INTERCEPTOR, "width": PL.TRUTH_W}
                 elif re.fullmatch(r"#\d+ · (target|interceptor)", name) and t.get("mode") == "lines" and t.get("x") not in ([None],):
-                    assert t["line"]["width"] in (PL.ON_W, PL.DEPARTED_W) and t["line"]["color"] in PL.RAMP_TGT + PL.RAMP_ITC + (PL.RAMP_FOLD,)
+                    assert t["line"]["width"] in (PL.ON_W, PL.DEPARTED_W) and t["line"]["color"] in PL.RAMP_TRACK + (PL.RAMP_FOLD, T.GREY_TRACK)
                     assert t["line"]["dash"] in PL.STEP_DASH and t["opacity"] in (1.0, PL.COAST_ALPHA, PL.DEPARTED_ALPHA)
             elif k == "map" and t.get("mode") == "lines" and name in ("interceptor truth", "target truth"):
                 assert t["line"]["width"] == max(PL.LINE_W, PL.TRAIL_W) == 5.0, (k, name)   # 2026-09-17 pm map contrast: truth trails 5 px over an 8 px halo
@@ -789,11 +789,11 @@ def test_cpa_marked_on_map_sep_and_every_error_and_velocity_card():
             assert not s_ and not any((t.get("name") or "").startswith(("CPA", "closest")) for t in figs[k]["data"])
             L_ = figs[k]["layout"]
             ln = {s.get("name"): s for s in L_.get("shapes", []) if str(s.get("name") or "").endswith("_line")}
-            assert ln["cpa_line"]["line"] == {"color": T.GOLD, "width": PL.CPA_LINE_W, "dash": "solid"} and ln["cpa_trk_line"]["line"] == {"color": T.TARGET, "width": PL.CPA_LINE_W, "dash": "dash"}
+            assert ln["cpa_line"]["line"] == {"color": T.GOLD, "width": PL.CPA_LINE_W, "dash": "solid"} and "cpa_trk_line" not in ln   # ONE line (2026-09-17 pm "CPA is CPA")
             lab = {a["name"]: a for a in L_.get("annotations", []) if str(a.get("name") or "").endswith("_label")}
-            assert lab["cpa_label"]["text"] == "CPA 59 m" and lab["cpa_trk_label"]["text"] == "CPA track 60 m" and lab["cpa_label"]["font"]["color"] == T.INK
-            assert lab["cpa_label"]["yshift"] > lab["cpa_trk_label"]["yshift"] and "07:22:31" in lab["cpa_label"]["hovertext"]   # the track's words one row lower
-            assert _store(at)["hud"] == {"cpa": "CPA truth 59 m · 07:22:31 · CPA track 60 m · 07:22:30"}   # 2026-09-17: both CPAs (track = interceptor truth <-> #177)
+            assert lab["cpa_label"]["text"] == "CPA 59 m" and lab["cpa_label"]["font"]["color"] == T.INK and "cpa_trk_label" not in lab
+            assert "07:22:31" in lab["cpa_label"]["hovertext"]
+            assert _store(at)["hud"] == {"cpa": "CPA 59 m · 07:22:31"}   # one CPA, one word
             assert any((t.get("name") or "") == "_anchor_pad" for t in figs[k]["data"])                 # 2 % right padding anchor
         assert not any(t.get("name") == "closest so far" for t in figs[k]["data"])
     gold_sep = [sh for sh in figs["sep"]["layout"]["shapes"] if sh["line"]["color"] == T.GOLD]
@@ -862,22 +862,22 @@ def test_cpa_gate_f1_before_after_and_gate_width():
     assert abs(run[0] - 78.4) < 0.6 and D.pdt_hms(run[1]) == "07:21:43" and at.session_state["cpa_ok"] is None
     stars, hair, hud, tile = state(at)
     # 2026-09-17 pm: no validated pass -> the card marks the AIRBORNE closest-so-far the same way (gold "CPA" line + header words), never nothing
-    assert (stars, hair) == (0, 1) and hud.startswith("CPA truth 78 m") and "07:21:43" in hud and tile[0] == "na" and tile[2] == "78<small>m</small>" and "no CPA yet" in tile[3]
+    assert (stars, hair) == (0, 1) and hud == "CPA 78 m · 07:21:43" and tile[0] == "na" and tile[2] == "78<small>m</small>" and "no CPA yet" in tile[3]
     # ... accepted by a 100 m gate (sidebar control)
     at = _at(LIVE, flight=1, anchor_t=F1_P1, playing=False, cpa_gate_m=100.0).run()
     assert not _exc(at), _exc(at)
     ok = at.session_state["cpa_ok"]
     assert ok is not None and abs(ok[0] - 78.4) < 0.6 and D.pdt_hms(ok[1]) == "07:21:43"
     stars, hair, hud, tile = state(at)
-    assert (stars, hair, hud) == (1, 1, "CPA truth 78 m · CPA track — · 07:21:43") and tile[0] == "gold" and "CPA 78 m" in tile[3]   # 2026-09-17: no track CPA at pass 1 (#177 read 143 m)
+    assert (stars, hair, hud) == (1, 1, "CPA 78 m · 07:21:43") and tile[0] == "gold" and "CPA 78 m" in tile[3]   # 2026-09-17: no track CPA at pass 1 (#177 read 143 m)
     # the minimum of pass 2 itself: still closing -> not yet
     at = _at(LIVE, flight=1, anchor_t=F1_MID, playing=False).run()
-    assert at.session_state["cpa_ok"] is None and state(at)[:2] == (0, 1) and state(at)[2].startswith("CPA truth ")   # 2026-09-17 pm: the closest-so-far mark, in the same "CPA" words (no stars)
+    assert at.session_state["cpa_ok"] is None and state(at)[:2] == (0, 1) and state(at)[2].startswith("CPA ")   # 2026-09-17 pm: the closest-so-far mark, in the same "CPA" words (no stars)
     # pass 2 over: first valid CPA at the default gate = 59 m @ 07:22:31
     at = _at(LIVE, flight=1, anchor_t=F1_AFTER, playing=False).run()
     ok = at.session_state["cpa_ok"]
     assert ok is not None and abs(ok[0] - 59.0) < 0.6 and D.pdt_hms(ok[1]) == "07:22:31" and at.session_state["cpa_run"] == ok
-    assert state(at)[:3] == (1, 1, "CPA truth 59 m · 07:22:31 · CPA track 60 m · 07:22:30")   # 2026-09-17: the track CPA rides the HUD with its own second
+    assert state(at)[:3] == (1, 1, "CPA 59 m · 07:22:31")   # 2026-09-17: the track CPA rides the HUD with its own second
     # engine unit: the gate itself on a synthetic separation series
     S = {"t": np.arange(0.0, 20.0), "sep": np.array([300, 250, 200, 150, 100, 60, 65, 80, 120, 170, 230, 300, 300, 300, 300, 300, 300, 300, 300, 300.0])}
     cpa = (60.0, 5.0, 0.0, 0.0, 50.0)
@@ -1363,12 +1363,12 @@ def test_measurement_space_quad_truth_tracks_obs():
     itc = [t for t in data if re.fullmatch(r"#\d+ · interceptor", t.get("name") or "")]
     assert not itc                                                                                            # 2026-09-17 hard rule: the interceptor's radar track is never drawn (quad included)
     # COLOUR = ROLE: every track line is drawn from the red ramp (target-side), the blue ramp (interceptor-side) or the fold grey — nothing else
-    allowed = set(PL.RAMP_TGT) | set(PL.RAMP_ITC) | {PL.RAMP_FOLD, T.GREY_TRACK}
+    allowed = set(PL.RAMP_TRACK) | {PL.RAMP_FOLD, T.GREY_TRACK}   # 2026-09-17 pm: measurement-card tracks are the INK ramp
     trk_lines = [t for t in data if re.fullmatch(r"#\d+ · (target|interceptor|no truth)", t.get("name") or "") and t.get("mode") == "lines"]
     assert trk_lines and all(t["line"]["color"] in allowed and t["line"]["dash"] in PL.STEP_DASH for t in trk_lines)
     assert PL.RAMP_TGT == ("#f3a6a6", T.TARGET, T.TARGET_DARK) and PL.RAMP_ITC == ("#8fb8f0", T.INTERCEPTOR, "#2a6cc7") and PL.RAMP_FOLD == "#8a8a8a"
-    steps = {t["name"]: (t["line"]["color"], t["line"]["dash"]) for t in trk_lines if t["line"]["width"] == PL.ON_W and t["line"]["color"] in PL.RAMP_TGT}
-    assert steps["#129 · target"] == (PL.RAMP_TGT[0], "dash") and steps["#177 · target"] == (PL.RAMP_TGT[1], "longdash")   # identity = lightness step + dash pattern (+ the pill); 2026-09-17 pm: tracks always dashed, truth solid
+    steps = {t["name"]: (t["line"]["color"], t["line"]["dash"]) for t in trk_lines if t["line"]["width"] == PL.ON_W and t["line"]["color"] in PL.RAMP_TRACK}
+    assert steps["#129 · target"] == (PL.RAMP_TRACK[0], "dash") and steps["#177 · target"] == (PL.RAMP_TRACK[1], "longdash")   # identity = lightness step + dash pattern (+ the pill); 2026-09-17 pm: tracks always dashed, truth solid
     map_trk = [t for t in _figs(at)["map"]["data"] if "track #" in (t.get("name") or "") and not (t.get("name") or "").startswith("_halo")]   # 2026-09-17: the dark halo under the track is not a series
     assert map_trk and all(t["line"]["color"] in set(PL.RAMP_TGT) | set(PL.RAMP_ITC) for t in map_trk)
     assert "amb_dop" in LS.HEADERS["meas"][1] and "2×mono" in LS.HEADERS["meas"][1]
@@ -1415,9 +1415,10 @@ def test_meas_quad_gating_envelope_off_scale_and_steal():
     assert not itc_side and thin and all(t["opacity"] == PL.DEPARTED_ALPHA for t in thin)   # 2026-09-17 hard rule: the stolen span is drawn departed-thin, never as the interceptor's (blue) track
     # y-ranges = TARGET TRUTH envelope ± 15 %, floors ± 0.6 km / ± 20 m/s / ± 2° / ± 30 m; the tracks never widen them (2026-09-17 pm: target truth only — the interceptor has its own card)
     for key, ax in (("rng", "yaxis"), ("rr", "yaxis2"), ("az", "yaxis3"), ("el", "yaxis4"), ("alt", "yaxis5")):
-        want = PL.truth_envelope([M["truth"]], key)
+        tgt_tracks = [tr for tr in M["tracks"] if PL.track_sides(tr)[1] in ("tgt", "free") or (PL.track_sides(tr)[0] == "tgt").any()]
+        want = PL.meas_envelope(M["truth"], tgt_tracks, key, "tgt")   # 2026-09-17 pm: truth ∪ on-target track samples (the tracks are never clipped)
         assert L[ax]["range"] == list(want), (key, L[ax]["range"], want)
-        v = PL._meas_val(M["truth"], key)
+        v = np.concatenate([PL._meas_val(M["truth"], key)] + [PL._meas_val(tr, key)[(PL.track_sides(tr)[0] == "tgt") & np.isfinite(PL._meas_val(tr, key))] for tr in tgt_tracks if PL.track_sides(tr)[1] != "free"])
         lo, hi = float(np.nanmin(v)), float(np.nanmax(v))
         assert want[0] <= lo and want[1] >= hi and (want[1] - want[0]) >= 2 * PL.MEAS_MIN_HALF[key] - 1e-9
         assert (want[1] - want[0]) <= max(2 * PL.MEAS_MIN_HALF[key], (hi - lo) * 1.3) + 1e-9
