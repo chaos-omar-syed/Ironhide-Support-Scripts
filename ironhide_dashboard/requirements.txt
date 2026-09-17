@@ -1,0 +1,10 @@
+# Ironhide dashboard — runtime (pinned to the versions it runs with today; Python 3.13, Linux)
+streamlit==1.63.0
+plotly==6.8.0          # also supplies plotly.min.js to the panel iframe (plotly.offline.get_plotlyjs)
+polars==1.41.2
+pymongo==4.10.1
+numpy==2.4.6
+pandas==3.0.3          # streamlit dependency (dataframe support)
+pillow==12.2.0         # satellite basemap tile compositing (ih/vendor/live_correlator.py)
+pymap3d==3.2.0         # only used by the optional chaos-spa adapter (ih/vendor/spa_errors.py)
+scipy==1.17.1          # not imported directly; pinned because chaos-spa's grading core uses it

@@ -1,0 +1,23 @@
+[theme]
+base = "dark"
+primaryColor = "#e5222b"
+backgroundColor = "#101215"
+secondaryBackgroundColor = "#23272e"
+textColor = "#f5f6f7"
+font = "sans serif"
+
+[theme.sidebar]
+backgroundColor = "#1a1d22"
+secondaryBackgroundColor = "#23272e"
+textColor = "#f5f6f7"
+
+[server]
+address = "0.0.0.0"
+port = 8901
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
