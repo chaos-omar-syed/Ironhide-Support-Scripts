@@ -38,7 +38,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.skipif(not HAVE_TOOLS, reason="gecko
 
 T0 = "07:21:40"                 # both vehicles airborne, pass 2 building up
 T_CPA = "07:22:31"              # F1 pass 2 (the standard screenshot moment)
-ICON_PX, ICON_FRAC = 44, 0.10
+ICON_PX, ICON_FRAC = 60, 0.18
 SAMPLE_S, SAMPLE_MS = 20.0, 100
 
 GEOM_JS = r"""
@@ -71,7 +71,7 @@ SIDEBAR_W_JS = "var s=document.querySelector('[data-testid=\"stSidebar\"]'); ret
 
 
 def _want_icon(scale: float, plot_h: float) -> int:
-    return max(16, min(round(ICON_PX * scale), round(ICON_FRAC * plot_h)))
+    return max(40, min(round(ICON_PX * scale), round(ICON_FRAC * plot_h)))
 
 
 def _fill(g: dict) -> float:

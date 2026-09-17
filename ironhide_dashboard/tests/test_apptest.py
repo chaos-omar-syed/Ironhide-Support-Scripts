@@ -568,7 +568,7 @@ def test_live_figures_follow_mark_and_chrome_spec():
                     assert t["line"]["width"] in (PL.ON_W, PL.DEPARTED_W) and t["line"]["color"] in PL.RAMP_TGT + PL.RAMP_ITC + (PL.RAMP_FOLD,)
                     assert t["line"]["dash"] in PL.STEP_DASH and t["opacity"] in (1.0, PL.COAST_ALPHA, PL.DEPARTED_ALPHA)
             elif k == "map" and t.get("mode") == "lines" and name in ("interceptor truth", "target truth"):
-                assert t["line"]["width"] == max(PL.LINE_W, PL.TRAIL_W) == 3.5, (k, name)   # 2026-09-17 map contrast: truth trails 3.5 px over a 6 px halo
+                assert t["line"]["width"] == max(PL.LINE_W, PL.TRAIL_W) == 5.0, (k, name)   # 2026-09-17 pm map contrast: truth trails 5 px over an 8 px halo
             elif t.get("mode") == "lines" and not t.get("fill") and (name in SERIES or name.startswith("track #")):
                 assert t["line"]["width"] == PL.LINE_W == LP["line_w"], (k, name)       # series lines 2.5 px (Laptop / Desktop presets)
         # text wears ink — except the map's track-number pills (team colour by design: "#177" red / "#203" blue) and the map's

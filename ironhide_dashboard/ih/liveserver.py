@@ -833,7 +833,7 @@ function mpp(){                                            // metres per pixel o
 }
 function iconPx(){                                        // the icon's ON-SCREEN edge: ICON_PX x text scale, capped at ICON_FRAC (14 %) of the map's PLOT-AREA HEIGHT (>= 32): constant whatever the zoom,
   var sc=(UI&&UI.text_scale)||1, ph=plotPx().h;            // 44 px on a >= 315 px plot area, 37 px on a 267 px laptop map (2026-09-17: the 10 % cap gave 27 px vehicles on a 1366x768 laptop — unreadable on satellite)
-  return Math.max(32,Math.min(Math.round(ICON_PX*sc),Math.round(ICON_FRAC*ph)));
+  return Math.max(40,Math.min(Math.round(ICON_PX*sc),Math.round(ICON_FRAC*ph)));   // 2026-09-17 pm: 60 px, 18 % cap, floor 40 ("make the icons larger")
 }
 function iconSizeM(){ return iconPx()*mpp(); }             // the same edge in metres at the current scale (diagnostics)
 function isPill(a){ return !!(a&&a.name&&String(a.name).indexOf("pill_")===0); }
@@ -946,7 +946,7 @@ def responsive_js(L: dict | None = None) -> str:
 // ── responsive geometry (the iframe knows its width; Streamlit only knows the preset's height) ──
 var PANEL={int(L['panel'])}, HEADER={int(L['header'])}, SPLIT=[{int(L['split'][0])},{int(L['split'][1])}], SPLIT3=[{int(L['split3'][0])},{int(L['split3'][1])},{int(L['split3'][2])}];
 var SEP_FRAC={SEP_FRAC}, SEP_FRAC3={SEP_FRAC3}, BP={int(BREAKPOINT_PX)}, UW={int(ULTRAWIDE_PX)}, MIN_CARD={int(MIN_CARD_PX)}, ERR_HDR={int(ERR_HDR_PX)}, ERR_T={ERR_T}, ERR_B={ERR_B}, ERR_GAP={ERR_GAP}, ERR_MIN={ERR_MIN_PX}, SEP_MIN={SEP_MIN_PX};
-var ICON_PX=44, ICON_FRAC=0.14, LEADER_MAX_PX=90, LEADER_MIN_PX=18;     // vehicle icon edge ON SCREEN (x text scale, <= ICON_FRAC x the plot-area height) and the 5 s velocity leader's on-screen length cap / floor
+var ICON_PX=60, ICON_FRAC=0.18, LEADER_MAX_PX=90, LEADER_MIN_PX=18;     // vehicle icon edge ON SCREEN (x text scale, <= ICON_FRAC x the plot-area height) and the 5 s velocity leader's on-screen length cap / floor
 var COL_GAP={COL_GAP_PX}, MAP_T0={map_top_nolegend_px()}, ONE_RIGHT_MIN={ONE_RIGHT_MIN_PX}, ONE_SEP={ONE_SEP_PX}, ONE_ERR={ONE_ERR_PX}, ONE_VEL={ONE_VEL_PX}, VEL_STRIP={VEL_STRIP_PX}, VEL_STRIP_MIN={VEL_STRIP_MIN_PX}, VEL_STRIP_FRAC={VEL_STRIP_FRAC}, ONE_MAP_FRAC={ONE_MAP_FRAC}, FONT_BP=1400, CARD_PAD_X=0.004, VEL_COL_GAP=0.03;
 var MAP_M={json.dumps(map_margin_px(L['font_px'], L.get('text_scale', 1.0)))};   // the map figure's FIXED margins (ih.plots.map_margin at this font / text scale): plotPx()'s pre-paint fallback
 var UI={{font_px:{int(L['font_px'])},line_w:{float(L['line_w'])},preset:{json.dumps(L['preset'])},text_scale:{float(L.get('text_scale', 1.0))}}};

@@ -196,6 +196,7 @@ div[data-testid="stPlotlyChart"] { background:var(--card); }
    NOT part of textContent, so every status assertion that reads the text still sees exactly the words we emit. */
 .ih-top .ih-status span + span::before { content:"·"; margin-right:.5em; color:var(--ink3); }
 .ih-top .ih-status .br::before, .ih-top .ih-status .br + span::before { content:none; margin:0; }
+@media (max-width: 1440px) { .ih-top .ih-status { font-size:1.12rem; } }   /* 2026-09-17 pm: at 1366 px the full counter (3 states + Hz) clipped the Hz reading at 1.3rem; 1.12rem fits with the sidebar open */
 /* Streamlit dims every element of a running fragment ("stale") after 0.5 s — on a slow laptop / Tailscale link that reads as the whole
    page flashing once a second.  The data is never stale for more than a tick: keep full opacity, no transition. */
 [data-testid="stMain"] .stale-element, [data-testid="stMain"] [data-stale="true"] { opacity:1 !important; transition:none !important; }

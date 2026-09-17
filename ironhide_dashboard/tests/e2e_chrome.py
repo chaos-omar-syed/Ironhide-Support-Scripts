@@ -89,7 +89,7 @@ MOVE_T = "07:21:40"                                          # 17 s before the F
 MOVE_WINDOW_S = float(os.environ.get("IH_CHROME_MOVE_S", 40.0))
 RUN_S = float(os.environ.get("IH_CHROME_RUN_S", 30.0))       # (b)
 MIN_SAMPLES = int(MOVE_WINDOW_S * 10 * 0.62)                 # 100 ms sampler, minus the seconds spent in the two clicks
-ICON_PX = 44
+ICON_PX = 60
 HEAD_TOL_PX = 20.0                                           # (b): head centre -> newest target trail point
 
 # Chrome logs things Firefox does not: Streamlit's page-scoped /_stcore probes 404 on a multipage URL, the react-dom

@@ -465,5 +465,5 @@ def test_icon_edge_follows_the_plot_area_height(report):
     shorter one, never under 32 (2026-09-17: the 10 % cap made 27 px vehicles on a 1366x768 laptop map, unreadable on satellite)."""
     ic = {float(k): v for k, v in report["icon"].items()}
     for sc, r in ic.items():
-        assert r["px"] == max(32, min(round(44 * sc), round(0.14 * r["plot_h"]))), (sc, r)
+        assert r["px"] == max(40, min(round(60 * sc), round(0.18 * r["plot_h"]))), (sc, r)
     assert ic[1.0]["plot_h"] == ic[1.15]["plot_h"] > 0

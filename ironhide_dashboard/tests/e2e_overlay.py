@@ -47,12 +47,12 @@ pytestmark = [pytest.mark.slow, pytest.mark.skipif(not HAVE_TOOLS, reason="gecko
 
 T0 = "07:21:40"                 # both vehicles airborne, pass 2 building up
 RUN_S = 30.0
-ICON_PX, ICON_FRAC = 44, 0.10
+ICON_PX, ICON_FRAC = 60, 0.18
 
 
 def want_icon(scale: float, plot_h: float) -> int:
     """ih.liveserver iconPx(): ICON_PX x text scale, capped at ICON_FRAC x the map's plot-area height, never under 16."""
-    return max(16, min(round(ICON_PX * float(scale)), round(ICON_FRAC * float(plot_h))))
+    return max(40, min(round(ICON_PX * float(scale)), round(ICON_FRAC * float(plot_h))))
 TAIL_S, TRAIL_S = 1.6, 3.5      # (b): head -> envelope tail (at lerp start the head is one ACTUAL tick interval behind: 1 s nominal + poll jitter; 0.5 s prediction at the end); head -> DRAWN trail end (the map is re-sent every ~2 s on top)
 
 WRAP_JS = r"""

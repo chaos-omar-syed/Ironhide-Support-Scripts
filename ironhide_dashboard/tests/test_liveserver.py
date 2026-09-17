@@ -271,10 +271,10 @@ def test_panel_js_has_the_responsive_breakpoints_view_lock_and_tween():
     overlay (30 Hz, l2p pixels, one base SVG per role rotated by CSS, SVG live segments / leaders, pixel-stacked pills,
     cost measurement -> 15 Hz), the satellite tile-only relayout, and the ultrawide chips."""
     js = LS.panel_script("abc123", "172.18.1.28", 8902, 1000)
-    for needle in ("BP=1150", "UW=2400", "FONT_BP=1400", f"MIN_CARD={LS.MIN_CARD_PX}", f"ERR_MIN={LS.ERR_MIN_PX}", f"ERR_HDR={LS.ERR_HDR_PX}", "ICON_PX=44", "function errRows(", "meta.err", "window.innerWidth", 'addEventListener("resize"',
+    for needle in ("BP=1150", "UW=2400", "FONT_BP=1400", f"MIN_CARD={LS.MIN_CARD_PX}", f"ERR_MIN={LS.ERR_MIN_PX}", f"ERR_HDR={LS.ERR_HDR_PX}", "ICON_PX=60", "function errRows(", "meta.err", "window.innerWidth", 'addEventListener("resize"',
                    'mode:"three"', 'mode:"two"', 'mode:"one"', "var mp=PANEL-HEADER, mm=mapMargin(), ph=mp-MAP_T0-mm.b, mapW=ph+mm.l+mm.r", "Math.min(PANEL-HEADER", "Plotly.Plots.resize", "Plotly.relayout",
                    # 2026-09-15 laptop panel: width pinned to the div, the key rows off in mode "one", icon <= 10 % of the plot height, the grid's own ResizeObserver, the frame re-applied after a re-shaped map
-                   "u.width=Math.round(gd.clientWidth", "function legendPatch(k,mode)", 'u["margin.t"]=one?MAP_T0', f"MAP_T0={LS.map_top_nolegend_px()}", "ICON_FRAC=0.14", "Math.round(ICON_FRAC*ph)",
+                   "u.width=Math.round(gd.clientWidth", "function legendPatch(k,mode)", 'u["margin.t"]=one?MAP_T0', f"MAP_T0={LS.map_top_nolegend_px()}", "ICON_FRAC=0.18", "Math.round(ICON_FRAC*ph)",
                    "new ResizeObserver(", "function refitView(p0)", 'grid.style.gridTemplateColumns=g.mode==="one"?(g.mapW+"px minmax(0,1fr)"):""',
                    '"font.size":f', "tickfont.size", "Math.max(b,Math.round(15*sc))", "Math.max(b,Math.round(13*sc))", "Math.max((UI&&UI.line_w)||2.5,3)",
                    "SEP_FRAC3", "viewportPanel", "window.parent.innerHeight", "frameElement", "bindParentKeys", "--ih-scale",   # A15 / A17: viewport fit, "m" key, text scale
