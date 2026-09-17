@@ -298,10 +298,15 @@ def _job_view(job: dict) -> None:
             D.refresh_registry()
             s["_save_registered"] = job["id"]
         m = res["meta"]
+        # AIRBORNE AUDIT (ih.archive): the save keeps the whole window on disk, the REPLAY window is trimmed to the
+        # airborne span — say so here, it is the answer to "why is my 21-minute save a 6-minute replay"
+        trim = D.airborne_trim_note(res.get("entry") or {})
         T.callout("SAVED", f"{res['label']} · flight {res['n']} · {D.fmt_age((job['t_end'] or time.time()) - job['t_start'])}",
                   f"<code>{T.esc(res['dir'])}/</code><br><b>{m['mavlink_rows']}</b> MAVLink rows ({T.esc(', '.join(m['mavlink_ids']) or 'no MAVLink truth')}) · "
                   f"<b>{m['tracks']}</b> tracks / {m['track_rows']} states (NED {m['layouts']['ned']} · ECEF {m['layouts']['ecef']}) · "
-                  f"<b>{m['obs_rows']}</b> observations · appended to {res['day']}/flights.json", tone="green")
+                  f"<b>{m['obs_rows']}</b> observations · appended to {res['day']}/flights.json"
+                  + (f"<br><b>{T.esc(trim)}</b>" + (f" · {T.esc(D.airborne_note(res.get('entry') or {}))}" if D.airborne_note(res.get("entry") or {}) else "")
+                     if trim else ""), tone="green")
         st.button("Switch to this flight", type="primary", key="switch_saved", on_click=_switch_saved, args=(res["n"],), width="stretch",
                   help="Replay the saved window through the archive path (Data source → ARCHIVE REPLAY).")
     else:
@@ -497,6 +502,11 @@ def _archive_section() -> None:
         ("Antenna", f"{b['ant'][0]:.5f}, {b['ant'][1]:.5f}, {b['ant'][2]:.1f} m HAE"),
         ("Clock", "replay starts 20 s before the flight window · ticks at 1 s"),
     ]
+    if D.airborne_trim_note(fi):     # saved flights carry the airborne audit (ih.archive): the replay window is the airborne span
+        rows.insert(-1, ("Airborne audit", f"<b>{T.esc(D.airborne_trim_note(fi))}</b>"
+                                           + (f" · {T.esc(D.airborne_note(fi))}" if D.airborne_note(fi) else "")
+                                           + f" · gate U &ge; {AR.AIRBORNE_MIN_M:g} m above the radar and ground speed &ge; {AR.AIRBORNE_TGT_SPEED_MPS:g} m/s"
+                                             f" · the saved CSVs still hold the whole window"))
     if fi.get("dir"):
         src = fi.get("source") or {}
         rows.insert(0, ("Saved from", f"<b>{T.esc(src.get('host') or '—')}</b> · run <code>{T.esc(str(src.get('run') or '')[:16])}</code> · {T.esc(src.get('saved_at_pdt') or '')}"

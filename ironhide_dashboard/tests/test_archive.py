@@ -14,6 +14,7 @@ import csv
 import json
 import math
 import os
+import shutil
 import sys
 import time
 
@@ -161,15 +162,28 @@ def test_flights_json_entry_and_registry_replay(fake, root):
     e = fl[0]
     for k in ("n", "t0", "t1", "t0_pdt", "t1_pdt", "drone_ids", "airborne_minutes", "segments", "passes", "tracking", "issues", "dir", "label", "source"):
         assert k in e, k
-    assert e["n"] == 5 and e["dir"] == res["dir"] and e["label"] == "Flight 1" and e["passes"] == [] and e["t0"] == W0 and e["t1"] == W1
+    assert e["n"] == 5 and e["dir"] == res["dir"] and e["label"] == "Flight 1" and e["passes"] == []
+    # AIRBORNE AUDIT: the saved window is kept as saved_t0/saved_t1, the REPLAY window is the airborne span (the 8/28 flight-1
+    # truth in this window: the target is up the whole time, the interceptor launches at 07:21:23 and is still up at the end)
+    assert (e["saved_t0"], e["saved_t1"]) == (W0, W1) and e["t0"] > W0 and e["t1"] == W1
+    assert (D.pdt_hms(e["t0"]), D.pdt_hms(e["t1"])) == ("07:21:03", "07:24:49")
+    assert len(e["airborne_segments"]) == 1 and e["airborne_s"] == pytest.approx(203.8, abs=1.0) and e["airborne_minutes"] == 3.4
+    sg = e["airborne_segments"][0]
+    assert (sg["t0"], sg["t1"]) == (e["t0"], e["t1"]) and D.pdt_hms(sg["air_t0"]) == "07:21:23" and D.pdt_hms(sg["air_t1"]) == "07:24:47"
+    assert sg["t0"] == pytest.approx(sg["air_t0"] - AR.LEAD_S) and sg["t1"] == min(W1, sg["air_t1"] + AR.TAIL_S)    # padded, clipped to the save
+    assert set(sg["drones"]) == {"mav14550_1_1", "mav14551_2_0", "mav14551_2_1", "mav14551_2_34"} and sg["t0_pdt"].startswith("2026-08-28T07:21:03")
+    assert D.airborne_note(e) == "airborne 07:21:23–07:24:47 · 3.4 min" and D.airborne_trim_note(e) == "airborne 3.4 of 4.0 min · replay trimmed to 07:21:03–07:24:49"
+    assert e["segments"][0]["t0"] == W0 and e["segments"][0]["t1"] == W1 and e["segments"][0]["type"] == "saved window"   # the SAVED span, not the trimmed one
+    assert res["meta"]["replay_window"] == [e["t0"], e["t1"]] and res["meta"]["airborne"]["airborne_s"] == e["airborne_s"]
     assert e["drone_ids"] == ["mav14550_1_1 (target)", "mav14551_2_* (interceptor)"] and e["source"]["mru"] == 91 and e["source"]["run"] == FM.RUN_COLL
-    assert e["t0_pdt"].startswith("2026-08-28T07:2") and e["airborne_minutes"] == 4.0
+    assert e["t0_pdt"].startswith("2026-08-28T07:2")
     # the registry sees it: flight 5 replays through the archive path with truth, tracks AND track_meta
     D.clear_flight_caches()
     reg = D.refresh_registry()
-    assert 5 in reg and D.FLIGHT_WINDOWS[5] == (W0, W1) and D.FLIGHT_DIRS[5] == res["dir"] and D.flight_dir(5) == res["dir"]
-    assert D.flight_label(5) == "8/28 · Flight 1 · 07:20–07:24 · 0 passes" and D.flight_short(5) == "8/28 · Flight 1"
-    assert D.passes(5) == [] and D.engagement_window(D.flight_info(5)) == (W0, W1)
+    assert 5 in reg and D.FLIGHT_WINDOWS[5] == (e["t0"], e["t1"]) and D.FLIGHT_DIRS[5] == res["dir"] and D.flight_dir(5) == res["dir"]
+    assert D.flight_label(5) == "8/28 · Flight 1 · 07:21–07:24 · 0 passes" and D.flight_short(5) == "8/28 · Flight 1"
+    assert D.passes(5) == [] and D.engagement_window(D.flight_info(5)) == (e["t0"], e["t1"])
+    assert D.airborne_segments(5) == e["airborne_segments"] and D.replay_bounds(5) == (e["t0"] - D.REPLAY_LEAD_S, e["t1"] + D.REPLAY_TAIL_S)
     b = D.archive_bundle(5, ((), (), D.TGT_PATTERN_DEFAULT, D.ITC_PATTERN_DEFAULT))
     assert b["ant"] == pytest.approx(FM.ANT) and len(b["tgt"]) > 100 and len(b["itc"]) > 50 and b["n_tracks"] > 50
     assert {r["name"] for r in b["raw"]} >= {"mav14550_1_1", "mav14551_2_0"}
@@ -234,6 +248,9 @@ def test_tracks_only_run_saves_without_truth_and_records_tx(fake, root):
     assert os.listdir(f"{res['dir']}/mavlink") == []
     e = json.load(open(os.path.join(root, "2026-08-28", "flights.json")))["runs"][0]["flights"][0]
     assert e["drone_ids"] == ["— (target)", "— (interceptor)"] and e["tracking"]["target"] is None
+    # no truth at all -> nothing is airborne -> the FULL window stays replayable, flagged airborne_s 0
+    assert e["airborne_segments"] == [] and e["airborne_s"] == 0.0 and (e["t0"], e["t1"]) == (W0, W0 + 90) == (e["saved_t0"], e["saved_t1"])
+    assert e["airborne_minutes"] == 1.5 and D.airborne_trim_note(e) == "no airborne segment found · full window kept (1.5 min)" and D.airborne_note(e) == ""
 
 
 def test_empty_window_is_refused_and_preview_counts(fake, root):
@@ -247,6 +264,139 @@ def test_empty_window_is_refused_and_preview_counts(fake, root):
     assert not bad["ok"] and "ServerSelectionTimeoutError" in bad["err"]
     assert AR.run8("run_e65bd4f92a9a4d6aa883c5f9d896a6ca") == "e65bd4f9" and AR.run8("abcdef0123") == "abcdef01" and AR.safe_label(" Flight 1 / a ") == "Flight_1_a"
     assert AR.day_of(W0) == "2026-08-28" and len(AR._edges(0.0, 250.0, 120.0)) == 4 and AR._edges(0.0, 240.0, 120.0) == [0.0, 120.0, 240.0]
+
+
+# ── AIRBORNE AUDIT ──────────────────────────────────────────────────────────
+T0 = D.hms_to_epoch("07:00:00")          # a synthetic saved window: [T0, T0 + 420]
+
+
+def _synth_save(dirpath: str, feeds: dict[str, list[tuple]], roles: dict | None = None, window=(T0, T0 + 420.0)) -> str:
+    """A saved-archive directory made of synthetic truth: feeds = {target_id: [(t, U_m, speed_mps)]} written as
+    mavlink/<id>.csv (MAV_COLS) + meta.json (window / roles), which is all the airborne audit reads."""
+    os.makedirs(os.path.join(dirpath, "mavlink"), exist_ok=True)
+    for tid, rows in feeds.items():
+        with open(os.path.join(dirpath, "mavlink", f"{tid}.csv"), "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(AR.MAV_COLS)
+            for t, u, spd in rows:
+                w.writerow([f"{t:.3f}", AR.iso_pdt(t), 33.75, -115.34, 500.0, 1000.0, 1000.0, f"{u:.2f}", f"{spd:.3f}", "0.000", 0, 1])
+    with open(os.path.join(dirpath, "meta.json"), "w") as f:
+        json.dump({"window": list(window), "roles": roles or {"target": ["tgt"], "interceptor": ["itc"]}}, f)
+    return dirpath
+
+
+def _legs(t_from: float, t_to: float, u: float, spd: float, step: float = 1.0, skip=()) -> list[tuple]:
+    """1 Hz truth samples of one phase; ``skip`` = (a, b) seconds to leave OUT (a data hole)."""
+    out = []
+    t = float(t_from)
+    while t <= t_to + 1e-9:
+        if not any(a <= t - T0 <= b for a, b in skip):
+            out.append((t, u, spd))
+        t += step
+    return out
+
+
+PARK = dict(u=-15.0, spd=0.0)            # on the pad: below the radar, not moving
+FLY = dict(u=80.0, spd=20.0)             # airborne: well above AIRBORNE_MIN_M, well over AIRBORNE_TGT_SPEED_MPS
+
+
+def test_airborne_audit_two_flights_with_a_parked_gap(tmp_path):
+    """parked · flight A (with a 20 s data hole — merged) · parked 60 s · flight B (the target flies on alone at the end)
+    -> TWO segments, each padded LEAD_S / TAIL_S and clipped to the saved window; the target-only tail is NOT airborne."""
+    d = _synth_save(str(tmp_path / "synth"), {
+        "tgt": _legs(T0, T0 + 60, **PARK) + _legs(T0 + 60, T0 + 180, **FLY, skip=((100, 120),)) + _legs(T0 + 181, T0 + 240, **PARK)
+               + _legs(T0 + 240, T0 + 400, **FLY) + _legs(T0 + 401, T0 + 420, **PARK),
+        "itc": _legs(T0, T0 + 60, **PARK) + _legs(T0 + 60, T0 + 180, **FLY) + _legs(T0 + 181, T0 + 240, **PARK)
+               + _legs(T0 + 240, T0 + 360, **FLY) + _legs(T0 + 361, T0 + 420, **PARK)})
+    a = AR.audit_window(d, T0, T0 + 420.0)
+    assert (a["saved_t0"], a["saved_t1"]) == (T0, T0 + 420.0) and a["trimmed"] is True
+    segs = a["airborne_segments"]
+    assert len(segs) == 2, segs
+    assert (segs[0]["air_t0"], segs[0]["air_t1"]) == (T0 + 60, T0 + 180)        # the 20 s hole is bridged (gap <= AIRBORNE_GAP_S)
+    assert (segs[0]["t0"], segs[0]["t1"]) == (T0 + 60 - AR.LEAD_S, T0 + 180 + AR.TAIL_S)
+    assert (segs[1]["air_t0"], segs[1]["air_t1"]) == (T0 + 240, T0 + 360)       # BOTH must fly: the target's 360-400 s solo tail is out
+    assert (segs[1]["t0"], segs[1]["t1"]) == (T0 + 240 - AR.LEAD_S, T0 + 360 + AR.TAIL_S)
+    assert all(s["drones"] == ["itc", "tgt"] for s in segs)
+    assert a["airborne_s"] == pytest.approx(240.0) and (a["t0"], a["t1"]) == (segs[0]["t0"], segs[-1]["t1"])
+    # the 60 s parked gap is what splits them: shrink it to 20 s and the two legs become ONE segment
+    d2 = _synth_save(str(tmp_path / "synth2"), {
+        "tgt": _legs(T0 + 60, T0 + 180, **FLY) + _legs(T0 + 200, T0 + 300, **FLY),
+        "itc": _legs(T0 + 60, T0 + 180, **FLY) + _legs(T0 + 200, T0 + 300, **FLY)})
+    a2 = AR.audit_window(d2, T0, T0 + 420.0)
+    assert len(a2["airborne_segments"]) == 1 and a2["airborne_s"] == pytest.approx(240.0)
+    assert (a2["t0"], a2["t1"]) == (T0 + 40, T0 + 315)
+    # clipping: a flight that runs to the very edge of the saved window cannot be padded past it
+    a3 = AR.audit_window(_synth_save(str(tmp_path / "synth3"), {"tgt": _legs(T0, T0 + 420, **FLY), "itc": _legs(T0, T0 + 420, **FLY)}), T0, T0 + 420.0)
+    assert (a3["t0"], a3["t1"]) == (T0, T0 + 420.0) and a3["airborne_s"] == pytest.approx(420.0)
+    # a SOLO sortie (only one role ever airborne) keeps its own legs — otherwise it would trim to nothing and replay the dead time
+    a4 = AR.audit_window(_synth_save(str(tmp_path / "solo"), {"tgt": _legs(T0 + 100, T0 + 200, **FLY), "itc": _legs(T0, T0 + 420, **PARK)}), T0, T0 + 420.0)
+    assert len(a4["airborne_segments"]) == 1 and a4["airborne_segments"][0]["drones"] == ["tgt"]
+    assert (a4["t0"], a4["t1"]) == (T0 + 80, T0 + 215) and a4["airborne_s"] == pytest.approx(100.0)
+
+
+def test_airborne_audit_no_flight_keeps_the_full_window(tmp_path):
+    """Both drones parked (below the radar, or hovering on the pad at < AIRBORNE_TGT_SPEED_MPS) -> no segment, full window."""
+    d = _synth_save(str(tmp_path / "parked"), {"tgt": _legs(T0, T0 + 420, u=-15.0, spd=0.0), "itc": _legs(T0, T0 + 420, u=50.0, spd=0.5)})
+    a = AR.audit_window(d, T0, T0 + 420.0)
+    assert a["airborne_segments"] == [] and a["airborne_s"] == 0.0 and (a["t0"], a["t1"]) == (T0, T0 + 420.0) and a["trimmed"] is False
+    e = AR.apply_audit({"label": "x", "t0": T0, "t1": T0 + 420.0, "passes": [], "issues": [], "airborne_minutes": 7.0}, a)
+    assert (e["t0"], e["t1"]) == (T0, T0 + 420.0) and e["airborne_s"] == 0.0 and e["airborne_minutes"] == 7.0
+    # the gate per drone: the altitude is the radar-relative U and the speed is the ground speed — 19 m up, or 80 m up at
+    # 1.9 m/s (a hover), is still parked; exactly ON both gates is airborne
+    for u, spd, want in ((AR.AIRBORNE_MIN_M - 1.0, 20.0, 0), (80.0, AR.AIRBORNE_TGT_SPEED_MPS - 0.1, 0), (AR.AIRBORNE_MIN_M, AR.AIRBORNE_TGT_SPEED_MPS, 1)):
+        d2 = _synth_save(str(tmp_path / f"edge_{u:g}_{spd:g}"), {"tgt": _legs(T0, T0 + 120, u=u, spd=spd)})
+        assert len(AR.drone_airborne_legs(os.path.join(d2, "mavlink", "tgt.csv"))) == want, (u, spd)
+        assert len(AR.audit_window(d2, T0, T0 + 420.0)["airborne_segments"]) == want     # the only feed -> the solo-role path
+    # an invalid position never counts even when it is high and fast (validposition == 0 rows are dropped everywhere else too)
+    p = os.path.join(str(tmp_path / "invalid"), "mavlink")
+    os.makedirs(p, exist_ok=True)
+    with open(os.path.join(p, "tgt.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(AR.MAV_COLS)
+        for t, u, spd in _legs(T0, T0 + 120, **FLY):
+            w.writerow([f"{t:.3f}", AR.iso_pdt(t), 33.75, -115.34, 500.0, 1000.0, 1000.0, f"{u:.2f}", f"{spd:.3f}", "0.000", 0, 0])
+    assert AR.drone_airborne_legs(os.path.join(p, "tgt.csv")) == []
+    assert AR.drone_airborne_legs(os.path.join(p, "nope.csv")) == []                     # a missing file never raises
+
+
+def test_audit_saved_flights_rewrites_flights_json_and_is_idempotent(tmp_path):
+    """The re-audit CLI path on a COPY of a real saved day (``$IH_ARCHIVE_ROOT``): the entries are rewritten in place with
+    the trimmed window, flights.json.bak is left behind, and a second pass changes nothing."""
+    src = os.path.join(D.ARCHIVE_ROOT, "2026-09-17")
+    if not os.path.isfile(os.path.join(src, "flights.json")):
+        pytest.skip(f"no saved 9/17 day under {D.ARCHIVE_ROOT} (range data, not shipped)")
+    root = str(tmp_path / "root")
+    dst = os.path.join(root, "2026-09-17")
+    os.makedirs(root, exist_ok=True)
+    shutil.copytree(src, dst)
+    before = {e["label"]: (e["t0"], e["t1"]) for r in json.load(open(f"{dst}/flights.json"))["runs"] for e in r["flights"]}
+    rows = AR.audit_saved_flights(root)
+    assert rows and {r["label"] for r in rows} == set(before) and all(r["file"] == f"{dst}/flights.json" for r in rows)
+    assert os.path.isfile(f"{dst}/flights.json.bak") and json.load(open(f"{dst}/flights.json.bak"))["day"] == "2026-09-17"
+    j = json.load(open(f"{dst}/flights.json"))
+    ents = {e["label"]: e for r in j["runs"] for e in r["flights"]}
+    for lab, e in ents.items():
+        w = before[lab]
+        assert (e["saved_t0"], e["saved_t1"]) == w or e["saved_t0"] <= w[0]          # the RAW window (meta.json) is preserved
+        assert e["saved_t0"] <= e["t0"] <= e["t1"] <= e["saved_t1"] and e["dir"].startswith(src)   # dir still points at the original save
+        assert e["t0"] == (e["airborne_segments"][0]["t0"] if e["airborne_segments"] else e["saved_t0"])
+        assert e["airborne_s"] >= 0.0 and e["airborne_minutes"] > 0.0 and isinstance(e["issues"], list)
+    # the 9/17 "Flight 2 full" save is the case that started this: 21 minutes on disk, 5.5 flown
+    full = ents.get("Flight 2 full")
+    if full:
+        assert (D.pdt_hms(full["saved_t0"]), D.pdt_hms(full["saved_t1"])) == ("07:00:00", "07:21:00")
+        assert (D.pdt_hms(full["t0"]), D.pdt_hms(full["t1"])) == ("07:13:20", "07:19:26") and full["airborne_minutes"] == 5.5
+        assert len(full["airborne_segments"]) == 1 and D.pdt_hms(full["airborne_segments"][0]["air_t0"]) == "07:13:40"
+        assert "mav14550_1_1" in full["airborne_segments"][0]["drones"]
+    # idempotent: re-auditing an already trimmed entry audits the SAVED window again, never the trimmed one
+    again = AR.audit_saved_flights(root)
+    assert {r["label"]: r["trimmed"] for r in again} == {r["label"]: r["trimmed"] for r in rows}
+    assert json.load(open(f"{dst}/flights.json")) == j
+    # --dry-run reports without writing
+    stamp = os.path.getmtime(f"{dst}/flights.json")
+    assert AR.main(["audit", "--root", root, "--day", "2026-09-17"]) == 0
+    dry = AR.audit_saved_flights(root, write=False)
+    assert dry and os.path.getmtime(f"{dst}/flights.json") >= stamp and AR.audit_line(dry[0]).startswith("2026-09-17 n=")
 
 
 # ── background job API ──────────────────────────────────────────────────────

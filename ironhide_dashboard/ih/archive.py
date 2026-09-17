@@ -10,10 +10,16 @@ Layout — mirrors Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_da
                                                                                          state has no covariance; ih.data.archive_bundle reads them as
                                                                                          NaN, and as NaN for older archives without the columns)
     obs/obs.csv              t_epoch,time_pdt,az_rad,el_rad,rng_m,rr_mps,bi_rng_m,bi_rng_rate_mps,truth_target_id,truth_match_type   (new)
-    meta.json                run, window, antenna, tx_lla, counts, layouts, mru / host, saved_at, label, columns
+    meta.json                run, window, antenna, tx_lla, counts, layouts, mru / host, saved_at, label, columns, airborne / replay_window
   + a flight entry appended to <day>/flights.json (the 8/28 schema — n, t0, t1, t0_pdt, t1_pdt, drone_ids, segments, passes, tracking,
-    issues — plus "dir", "label", "source"); ih.data.append_flight_entry assigns the flight number, ih.data.refresh_registry makes
-    it replayable (FLIGHT_WINDOWS / FLIGHT_DIRS).
+    issues — plus "dir", "label", "source", and the audit's airborne_segments / airborne_s / saved_t0 / saved_t1);
+    ih.data.append_flight_entry assigns the flight number, ih.data.refresh_registry makes it replayable (FLIGHT_WINDOWS / FLIGHT_DIRS).
+
+AIRBORNE AUDIT (2026-09-17) — every save is audited the moment its CSVs are written (audit_window / apply_audit): the flight
+entry's REPLAY window t0/t1 is trimmed to the span the drones actually flew (the raw window kept as saved_t0/saved_t1, the
+CSVs never cut), so a 21-minute save with 5.5 minutes of flying replays 5.5 minutes.  Old saves are re-audited in place with
+  python -m ih.archive audit --root <IH_ARCHIVE_ROOT> [--day 2026-09-17] [--dry-run]
+(audit_saved_flights: flights.json.bak first, then an atomic rewrite).  See the AIRBORNE AUDIT block below for the rule.
 
 Truth E/N/U use the SAME frame as the live view (corr_lib.EnuFrame about the run's antenna origin; altitude FEET MSL -> m
 WGS-84 HAE via corr_lib.mavlink_alt_hae_m), so a saved flight replays exactly what the Live page showed (the 8/28 dumps used
@@ -27,10 +33,12 @@ save_archive: same layout, same code.
 from __future__ import annotations
 
 import csv
+import glob
 import json
 import math
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -40,6 +48,7 @@ import numpy as np
 
 from . import data as D
 from . import feed as F
+from .engine import AIRBORNE_MIN_M, AIRBORNE_TGT_SPEED_MPS   # the SAME airborne gate the engine grades passes with
 
 CHUNK_S = 120.0                 # per-query time slice (indexed full_sec range) = progress granularity
 SOCKET_TIMEOUT_MS = 120_000     # a whole-run chunk on an ADS-B-heavy unit can be slow; the page's 3 s timeout does not apply to the job
@@ -180,22 +189,295 @@ def dump_window(col, t0: float, t1: float, out_dir: str, ant: tuple | None, *, p
             "n_adsb_docs": int(n_adsb_docs)}
 
 
-def flight_entry(meta: dict, out_dir: str) -> dict:
+# ── AIRBORNE AUDIT ───────────────────────────────────────────────────────────
+# A saved window is mostly dead time (drones on the pad, batteries swapped): the 9/17 "Flight 2 full" save is 21 minutes
+# of which 5.5 were flown.  The audit reads the truth that was JUST written (so it is the same code for a save and for a
+# re-audit of an old save) and trims the flight entry's REPLAY window to the airborne span — the data on disk is never cut.
+#
+# The rule is the engine's airborne gate (engine.AIRBORNE_MIN_M / AIRBORNE_TGT_SPEED_MPS, so a replayed window covers
+# exactly the samples the engine can grade a pass on):
+#   * a drone is AIRBORNE at a truth sample when validposition == 1, its ENU U is >= AIRBORNE_MIN_M above the RADAR and its
+#     ground speed is >= AIRBORNE_TGT_SPEED_MPS (a hover on the pad is not a flight);  consecutive airborne samples join
+#     into a leg while their gap is <= AIRBORNE_HOLD_S (= data.MAX_GAP_S, the no-interpolation gap);
+#   * a ROLE's legs = the union over its drones (a 14551_2_* id that re-numbers mid-flight is one interceptor);
+#   * AIRBORNE = the INTERSECTION of the roles that fly at all — both drones must be up, as engine.airborne_mask requires
+#     (that is what pulled 9/17 "Flight 2 full" down to 07:13:40-07:19:11: the target was up from 07:12:20 but the
+#     interceptor sat on the pad).  A save with only ONE role airborne (a solo sortie, e.g. 9/15) keeps that role's legs —
+#     otherwise a solo flight would trim to nothing and replay its full dead window.
+# Legs closer than AIRBORNE_GAP_S merge; each segment is padded LEAD_S before / TAIL_S after and clipped to the saved
+# window (overlapping padded segments merge).  NO airborne segment at all -> the full window is kept with airborne_s = 0.
+AIRBORNE_GAP_S = 30.0            # legs this close (or closer) are ONE replay segment
+LEAD_S, TAIL_S = 20.0, 15.0      # padding around an airborne segment (the takeoff run-up / the landing)
+AIRBORNE_HOLD_S = D.MAX_GAP_S    # a gap wider than this (2.5 s) breaks a leg — the truth is not interpolated across it
+
+
+def _merge_ivals(ivs, gap_s: float = 0.0) -> list[tuple[float, float]]:
+    """Sorted, merged [(t0, t1)] — intervals whose gap is <= ``gap_s`` become one."""
+    out: list[list[float]] = []
+    for a, b in sorted((float(a), float(b)) for a, b in ivs):
+        if out and a - out[-1][1] <= float(gap_s):
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
+def _intersect_ivals(a_ivs, b_ivs) -> list[tuple[float, float]]:
+    """The overlap of two sorted, merged interval lists (zero-length touches dropped)."""
+    out, i, j = [], 0, 0
+    while i < len(a_ivs) and j < len(b_ivs):
+        a, b = max(a_ivs[i][0], b_ivs[j][0]), min(a_ivs[i][1], b_ivs[j][1])
+        if b > a:
+            out.append((a, b))
+        if a_ivs[i][1] < b_ivs[j][1]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def drone_airborne_legs(csv_path: str, t0: float | None = None, t1: float | None = None, *, min_m: float = AIRBORNE_MIN_M,
+                        min_spd: float = AIRBORNE_TGT_SPEED_MPS, hold_s: float = AIRBORNE_HOLD_S) -> list[tuple[float, float]]:
+    """AIRBORNE legs [(t0, t1)] of ONE saved MAVLink truth CSV (mavlink/<target_id>.csv, MAV_COLS): samples with
+    validposition == 1, U_m_hae (ENU U about the antenna) >= ``min_m`` and ground speed >= ``min_spd``, consecutive
+    samples joined while their gap is <= ``hold_s``.  Blank U (a run with no TRACKS document -> no ENU) never counts.
+    Never raises (a missing / broken file has no legs)."""
+    legs: list[tuple[float, float]] = []
+    cur: list[float] | None = None
+    try:
+        fh = open(csv_path, newline="")
+    except OSError:
+        return []
+    with fh:
+        for r in csv.DictReader(fh):
+            try:
+                t = float(r["t_epoch"])
+                u = float(r["U_m_hae"])
+                spd = math.hypot(float(r["vel_n_mps"] or 0.0), float(r["vel_e_mps"] or 0.0))
+                valid = int(float(r.get("validposition") or 0)) == 1
+            except (TypeError, ValueError, KeyError):
+                continue
+            if (t0 is not None and t < float(t0) - 1e-6) or (t1 is not None and t > float(t1) + 1e-6):
+                continue
+            if not (valid and math.isfinite(u) and u >= float(min_m) and spd >= float(min_spd)):
+                continue
+            if cur is not None and t - cur[1] <= float(hold_s):
+                cur[1] = t
+            else:
+                if cur is not None:
+                    legs.append((cur[0], cur[1]))
+                cur = [t, t]
+    if cur is not None:
+        legs.append((cur[0], cur[1]))
+    return legs
+
+
+def _role_of(name: str, roles: tuple | None) -> str:
+    """D.role_of, safe off the Streamlit thread / in the CLI (no session state -> the default patterns)."""
+    try:
+        return D.role_of(name, roles)
+    except Exception:
+        return D.role_of(name, ((), (), D.TGT_PATTERN_DEFAULT, D.ITC_PATTERN_DEFAULT))
+
+
+def audit_window(out_dir: str, t0: float, t1: float, *, roles_map: dict | None = None, roles: tuple | None = None) -> dict:
+    """The AIRBORNE AUDIT of one saved flight directory (see the block comment): reads mavlink/*.csv, returns
+      {airborne_segments: [{t0, t1, t0_pdt, t1_pdt, drones, air_t0, air_t1, air_t0_pdt, air_t1_pdt, airborne_s}],
+       airborne_s, t0, t1 (the TRIMMED replay window = first segment t0 .. last segment t1), saved_t0, saved_t1,
+       legs {drone: [[t0, t1]]}, roles {drone: role}, trimmed}
+    ``roles_map`` = meta.json's {"target": [ids], "interceptor": [ids]} (the mapping the flight was SAVED with, as
+    ih.data.archive_bundle honours); read from meta.json when not given, then D.role_of for anything unmapped."""
+    t0, t1 = float(min(t0, t1)), float(max(t0, t1))
+    if roles_map is None:
+        try:
+            with open(os.path.join(out_dir, "meta.json")) as f:
+                roles_map = json.load(f).get("roles") or {}
+        except Exception:
+            roles_map = {}
+    saved_role = {str(i): str(r) for r, ids in (roles_map or {}).items() for i in (ids or ())}
+    legs: dict[str, list[tuple[float, float]]] = {}
+    who: dict[str, str] = {}
+    by_role: dict[str, list[tuple[float, float]]] = {"target": [], "interceptor": []}
+    for p in sorted(glob.glob(os.path.join(out_dir, "mavlink", "*.csv"))):
+        name = os.path.splitext(os.path.basename(p))[0]
+        role = saved_role.get(name) or _role_of(name, roles)
+        if role not in by_role:
+            continue
+        who[name] = role
+        lg = drone_airborne_legs(p, t0, t1)
+        if lg:
+            legs[name] = lg
+            by_role[role] += lg
+    air = {r: _merge_ivals(v) for r, v in by_role.items() if v}
+    if len(air) >= 2:                                        # both roles flew: the span where BOTH are up (engine.airborne_mask)
+        core = air["target"]
+        for r, v in air.items():
+            if r != "target":
+                core = _intersect_ivals(core, v)
+    else:                                                    # a solo sortie keeps its own legs (else it would trim to nothing)
+        core = list(next(iter(air.values()), []))
+    core = _merge_ivals(core, AIRBORNE_GAP_S)
+
+    segs: list[dict] = []
+    for a, b in core:
+        p0, p1 = max(t0, a - LEAD_S), min(t1, b + TAIL_S)
+        if segs and p0 <= segs[-1]["t1"]:                    # padding made two segments touch: one segment, two legs
+            segs[-1].update(t1=max(segs[-1]["t1"], p1), air_t1=b)
+            segs[-1]["airborne_s"] += b - a
+        else:
+            segs.append({"t0": p0, "t1": p1, "air_t0": a, "air_t1": b, "airborne_s": b - a})
+    out_segs = []
+    for sg in segs:
+        drones = sorted(n for n, lg in legs.items()
+                        if any(min(sg["air_t1"], lb) - max(sg["air_t0"], la) > 0 for la, lb in lg))
+        sg["t0"], sg["t1"] = max(t0, round(sg["t0"], 3)), min(t1, round(sg["t1"], 3))     # rounding must never leave the saved window
+        out_segs.append({"t0": sg["t0"], "t1": sg["t1"], "t0_pdt": iso_pdt(sg["t0"]), "t1_pdt": iso_pdt(sg["t1"]),
+                         "drones": drones, "air_t0": round(sg["air_t0"], 3), "air_t1": round(sg["air_t1"], 3),
+                         "air_t0_pdt": iso_pdt(sg["air_t0"]), "air_t1_pdt": iso_pdt(sg["air_t1"]), "airborne_s": round(sg["airborne_s"], 1)})
+    return {"airborne_segments": out_segs, "airborne_s": round(sum(s["airborne_s"] for s in out_segs), 1),
+            "saved_t0": t0, "saved_t1": t1,
+            "t0": out_segs[0]["t0"] if out_segs else t0, "t1": out_segs[-1]["t1"] if out_segs else t1,
+            "legs": {k: [[round(a, 3), round(b, 3)] for a, b in v] for k, v in legs.items()}, "roles": who,
+            "trimmed": bool(out_segs), "rule": f"U >= {AIRBORNE_MIN_M:g} m above the radar AND ground speed >= {AIRBORNE_TGT_SPEED_MPS:g} m/s "
+                                               f"(both roles when both fly) · legs merged at {AIRBORNE_GAP_S:g} s · +{LEAD_S:g} s / -{TAIL_S:g} s padding"}
+
+
+def saved_window(entry: dict, out_dir: str | None = None) -> tuple[float, float] | None:
+    """The RAW saved window of a flight entry: ``saved_t0``/``saved_t1`` (written by a previous audit) > meta.json's
+    ``window`` > the entry's t0/t1.  Re-auditing is therefore idempotent — it never audits an already trimmed window."""
+    if entry.get("saved_t0") is not None and entry.get("saved_t1") is not None:
+        return float(entry["saved_t0"]), float(entry["saved_t1"])
+    if out_dir:
+        try:
+            with open(os.path.join(out_dir, "meta.json")) as f:
+                w = json.load(f).get("window")
+            if w and len(w) >= 2:
+                return float(w[0]), float(w[1])
+        except Exception:
+            pass
+    if entry.get("t0") is not None and entry.get("t1") is not None:
+        return float(entry["t0"]), float(entry["t1"])
+    return None
+
+
+def apply_audit(entry: dict, audit: dict) -> dict:
+    """A flight entry with the audit applied: ``airborne_segments`` / ``airborne_s``, the REPLAY window t0/t1 trimmed to
+    the airborne span (the raw window kept as ``saved_t0``/``saved_t1``), ``airborne_minutes`` = the airborne total (the
+    saved window's length when nothing flew), the "saved window" segment left on the raw span, and ``passes`` filtered to
+    the trimmed window (a dropped pass is noted in ``issues``)."""
+    e = dict(entry)
+    st0, st1 = float(audit["saved_t0"]), float(audit["saved_t1"])
+    segs = list(audit["airborne_segments"])
+    e["saved_t0"], e["saved_t1"], e["saved_t0_pdt"], e["saved_t1_pdt"] = st0, st1, iso_pdt(st0), iso_pdt(st1)
+    e["t0"], e["t1"] = float(audit["t0"]), float(audit["t1"])
+    e["t0_pdt"], e["t1_pdt"] = iso_pdt(e["t0"]), iso_pdt(e["t1"])
+    e["airborne_segments"], e["airborne_s"] = segs, float(audit["airborne_s"])
+    e["airborne_minutes"] = round(float(audit["airborne_s"]) / 60.0, 1) if segs else round((st1 - st0) / 60.0, 1)
+    e["segments"] = [({**s, "t0": st0, "t1": st1, "t0_pdt": iso_pdt(st0), "t1_pdt": iso_pdt(st1)} if s.get("type") == "saved window" else s)
+                     for s in (e.get("segments") or [])]
+    if e.get("passes"):
+        keep = [p for p in e["passes"] if not isinstance(p.get("t"), (int, float)) or e["t0"] <= float(p["t"]) <= e["t1"]]
+        if len(keep) != len(e["passes"]):
+            e["issues"] = list(e.get("issues") or []) + [f"{len(e['passes']) - len(keep)} pass(es) outside the airborne window "
+                                                         f"({D.pdt_hms(e['t0'])}-{D.pdt_hms(e['t1'])}) dropped by the airborne audit"]
+        e["passes"] = keep
+    return e
+
+
+def audit_line(row: dict) -> str:
+    """One line of the audit report (CLI / report): saved window -> trimmed window + the airborne legs."""
+    s0, s1 = row["saved"]
+    t0, t1 = row["trimmed"]
+    segs = row.get("segments") or []
+    legs = " · ".join(f"{D.pdt_hms(s['air_t0'])}-{D.pdt_hms(s['air_t1'])} [{', '.join(s['drones'])}]" for s in segs) or "NO airborne segment (full window kept)"
+    return (f"{row.get('day', '')} n={row.get('n')} {row.get('label', '')}: saved {D.pdt_hms(s0)}-{D.pdt_hms(s1)} ({(s1 - s0) / 60.0:.1f} min) "
+            f"-> replay {D.pdt_hms(t0)}-{D.pdt_hms(t1)} ({(t1 - t0) / 60.0:.1f} min) · airborne {row['airborne_s']:.0f} s "
+            f"({row['airborne_s'] / 60.0:.1f} min) in {len(segs)} segment{'' if len(segs) == 1 else 's'}: {legs}")
+
+
+def audit_saved_flights(root: str | None = None, *, day: str | None = None, write: bool = True, backup: bool = True) -> list[dict]:
+    """RE-AUDIT every saved flight under ``<root>/*/flights.json`` (root = ih.data.ARCHIVE_ROOT) from its CSVs and rewrite
+    the entries in place (``flights.json.bak`` written first; atomic tmp + os.replace).  ``day`` limits it to one day
+    folder, ``write=False`` is a dry run.  Returns one row per audited flight:
+    {file, day, n, label, dir, saved (t0, t1), trimmed (t0, t1), airborne_s, segments, entry} — audit_line formats it.
+    The caller refreshes the in-process registry (D.clear_flight_caches + D.refresh_registry) itself."""
+    root = root or D.ARCHIVE_ROOT
+    rows: list[dict] = []
+    for fj in sorted(glob.glob(os.path.join(root, "*", "flights.json"))):
+        fday = os.path.basename(os.path.dirname(fj))
+        if day and fday != str(day):
+            continue
+        try:
+            with open(fj) as f:
+                j = json.load(f)
+        except Exception:
+            continue
+        changed = False
+        for r in j.get("runs", []) or []:
+            fls = r.get("flights") or []
+            for i, fl in enumerate(fls):
+                d = fl.get("dir")
+                if not d:
+                    continue                              # built-in / hand-written entries (no saved CSV directory) are left alone
+                path = d if os.path.isabs(d) else os.path.join(os.path.dirname(fj), d)
+                w = saved_window(fl, path)
+                if w is None:
+                    continue
+                a = audit_window(path, w[0], w[1])
+                e = apply_audit(fl, a)
+                fls[i] = e
+                changed = True
+                rows.append({"file": fj, "day": str(j.get("day") or fday), "n": fl.get("n"), "label": fl.get("label") or "", "dir": path,
+                             "saved": (a["saved_t0"], a["saved_t1"]), "trimmed": (e["t0"], e["t1"]), "airborne_s": a["airborne_s"],
+                             "segments": a["airborne_segments"], "entry": e})
+        if changed and write:
+            if backup:
+                shutil.copy2(fj, fj + ".bak")
+            tmp = fj + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(j, f, indent=1)
+            os.replace(tmp, fj)
+    return rows
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m ih.archive audit --root <IH_ARCHIVE_ROOT> [--day 2026-09-17] [--dry-run]`` — re-audit saved flights."""
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python -m ih.archive", description="Ironhide archive maintenance (airborne audit of saved flights).")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    au = sub.add_parser("audit", help="recompute the airborne segments of every saved flight and rewrite flights.json (backed up first)")
+    au.add_argument("--root", default=None, help=f"archive root (default $IH_ARCHIVE_ROOT / {D.ARCHIVE_ROOT})")
+    au.add_argument("--day", default=None, help="only this day folder, e.g. 2026-09-17")
+    au.add_argument("--dry-run", action="store_true", help="report only; do not rewrite flights.json")
+    ns = ap.parse_args(argv)
+    rows = audit_saved_flights(ns.root, day=ns.day, write=not ns.dry_run)
+    print(f"AIRBORNE AUDIT · {len(rows)} saved flight(s) under {ns.root or D.ARCHIVE_ROOT}{' · DRY RUN' if ns.dry_run else ''}")
+    for r in rows:
+        print("  " + audit_line(r))
+    if not rows:
+        print("  (no saved flights found)")
+    return 0
+
+
+def flight_entry(meta: dict, out_dir: str, audit: dict | None = None) -> dict:
     """The flights.json entry for a saved window (8/28 schema fields + dir / label / source); ``n`` is added by
-    ih.data.append_flight_entry."""
+    ih.data.append_flight_entry.  ``audit`` = audit_window's result: the entry's REPLAY window is then the airborne span
+    (apply_audit; the raw window stays as saved_t0/saved_t1 and the CSVs on disk are never cut)."""
     t0, t1 = meta["window"]
     tg, ic = meta["roles"]["target"], meta["roles"]["interceptor"]
-    return {"label": meta["label"], "dir": out_dir, "t0": t0, "t1": t1, "t0_pdt": iso_pdt(t0), "t1_pdt": iso_pdt(t1),
-            "drone_ids": [f"{D.collapse_ids(tg)} (target)", f"{D.collapse_ids(ic)} (interceptor)"], "airborne_minutes": round((t1 - t0) / 60.0, 1),
-            "segments": [{"type": "saved window", "n": 1, "t0": t0, "t1": t1, "t0_pdt": iso_pdt(t0), "t1_pdt": iso_pdt(t1),
-                          "note": "the whole saved window (no flight segmentation)"}],
-            "passes": [],
-            "tracking": {"target": tg[0] if tg else None, "n_tracks": meta["tracks"], "track_rows": meta["track_rows"], "obs_rows": meta["obs_rows"],
-                         "mavlink_rows": meta["mavlink_rows"], "layouts": meta["layouts"]},
-            "issues": [],
-            "source": {"mru": meta.get("mru"), "host": meta.get("host"), "port": meta.get("port"), "run": meta.get("run_collection"),
-                       "saved_at_pdt": meta.get("saved_at_pdt")},
-            "note": "saved from the live dashboard (ih.archive.save_archive); passes not computed"}
+    e = {"label": meta["label"], "dir": out_dir, "t0": t0, "t1": t1, "t0_pdt": iso_pdt(t0), "t1_pdt": iso_pdt(t1),
+         "drone_ids": [f"{D.collapse_ids(tg)} (target)", f"{D.collapse_ids(ic)} (interceptor)"], "airborne_minutes": round((t1 - t0) / 60.0, 1),
+         "segments": [{"type": "saved window", "n": 1, "t0": t0, "t1": t1, "t0_pdt": iso_pdt(t0), "t1_pdt": iso_pdt(t1),
+                       "note": "the whole saved window (no flight segmentation)"}],
+         "passes": [],
+         "tracking": {"target": tg[0] if tg else None, "n_tracks": meta["tracks"], "track_rows": meta["track_rows"], "obs_rows": meta["obs_rows"],
+                      "mavlink_rows": meta["mavlink_rows"], "layouts": meta["layouts"]},
+         "issues": [],
+         "source": {"mru": meta.get("mru"), "host": meta.get("host"), "port": meta.get("port"), "run": meta.get("run_collection"),
+                    "saved_at_pdt": meta.get("saved_at_pdt")},
+         "note": "saved from the live dashboard (ih.archive.save_archive); passes not computed"}
+    return apply_audit(e, audit) if audit else e
 
 
 def save_archive(host: str, port: int, db: str, run: str, t0: float, t1: float, *, label: str = "", mru=None, root: str | None = None,
@@ -222,7 +504,7 @@ def save_archive(host: str, port: int, db: str, run: str, t0: float, t1: float, 
     finally:
         cl.close()
     if progress:
-        progress(0.97, "writing meta.json")
+        progress(0.96, "airborne audit")
     roles = roles or ((), (), D.TGT_PATTERN_DEFAULT, D.ITC_PATTERN_DEFAULT)
     ids = counts["mavlink_ids"]
     now = time.time()
@@ -235,9 +517,15 @@ def save_archive(host: str, port: int, db: str, run: str, t0: float, t1: float, 
             "roles": {"target": [i for i in ids if D.role_of(i, roles) == "target"], "interceptor": [i for i in ids if D.role_of(i, roles) == "interceptor"]},
             **{k: counts[k] for k in ("mavlink_rows", "track_rows", "tracks", "obs_rows", "layouts", "n_adsb_docs")}, "mavlink_ids": ids,
             "columns": {"mavlink": MAV_COLS, "tracks": TRK_COLS, "obs": OBS_COLS}}
+    # AIRBORNE AUDIT of the truth just written (the whole window stays on disk; only the REPLAY window is trimmed)
+    audit = audit_window(out_dir, t0, t1, roles_map=meta["roles"], roles=roles)
+    meta["airborne"] = {k: audit[k] for k in ("airborne_segments", "airborne_s", "trimmed", "rule", "legs")}
+    meta["replay_window"] = [audit["t0"], audit["t1"]]
+    if progress:
+        progress(0.97, "writing meta.json")
     with open(os.path.join(out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=1)
-    entry = flight_entry(meta, out_dir)
+    entry = flight_entry(meta, out_dir, audit)
     n = None
     if register:
         n = D.append_flight_entry(day, r8, entry, root=root)
@@ -302,3 +590,7 @@ def job(jid) -> dict | None:
 def running_jobs() -> list[dict]:
     with _LOCK:
         return [dict(j) for j in JOBS.values() if j["state"] == "running"]
+
+
+if __name__ == "__main__":      # python -m ih.archive audit --root <IH_ARCHIVE_ROOT>
+    raise SystemExit(main())

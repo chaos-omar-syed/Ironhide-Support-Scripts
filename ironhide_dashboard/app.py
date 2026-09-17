@@ -121,6 +121,11 @@ with st.sidebar:
         st.slider("Replay time", min_value=_lo, max_value=_hi, step=1, key="_seek_w", format=" ", on_change=_seek_from_slider,
                   help="Drag to any moment of the flight (pauses the replay; press Play to continue).")
         st.caption(f"{D.pdt_hms(_lo)}  ◂  {D.pdt_hms(float(s['_seek_w']))}  ▸  {D.pdt_hms(_hi)}")
+        # the slider spans the AIRBORNE-AUDITED window (ih.archive: a saved flight's t0/t1 are trimmed to the span the
+        # drones actually flew), so say what that span is — 9/17 "Flight 2 full" was 21 min saved, 5.5 min flown
+        _air = D.airborne_note(fi)
+        if _air:
+            st.caption(_air)
         st.radio("Replay speed (× real time)", [1.0, 2.0, 4.0], key="speed", horizontal=True, format_func=lambda v: f"{v:g}×", on_change=D.speed_changed,
                  help="How fast the replay clock runs compared with real time (applies from now on; the clock never jumps).")
         verified = [p for p in D.passes(fl) if p.get("verified")]

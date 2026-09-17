@@ -287,7 +287,9 @@ def saved_flights(root: str | None = None) -> list[dict]:
 
 def refresh_registry() -> dict:
     """Merge the saved flights into FLIGHT_WINDOWS / FLIGHT_DIRS (the replay clock, bundle loader and frame
-    key off those) and return {n: flight dict}.  Called by init_state and after every save."""
+    key off those) and return {n: flight dict}.  Called by init_state and after every save.
+    The window taken is the entry's t0/t1 = the AIRBORNE-AUDITED (trimmed) replay window (ih.archive.apply_audit; the
+    raw saved window is saved_t0/saved_t1 and the CSVs on disk still hold it), so a replay never plays the dead time."""
     fl = load_flights()["flights"]
     for n, fi in fl.items():
         if fi.get("dir"):
@@ -405,6 +407,45 @@ def engagement_window(fi: dict) -> tuple[float, float]:
         if s.get("type") == "engagement":
             return float(s["t0"]), float(s["t1"])
     return float(fi["t0"]), float(fi["t1"])
+
+
+def airborne_segments(n: int) -> list[dict]:
+    """The AIRBORNE segments of a saved flight (ih.archive.audit_window, in its flights.json entry): [{t0, t1, t0_pdt,
+    t1_pdt, drones, air_t0, air_t1, airborne_s}] — the padded replay spans with the airborne leg inside each.
+    [] for the built-in 8/28 flights and for any save made before the audit existed."""
+    try:
+        return list(flight_info(n).get("airborne_segments") or [])
+    except Exception:
+        return []
+
+
+def airborne_note(fi: dict | int) -> str:
+    """'airborne 07:13:40–07:19:11 · 5.5 min' (two legs: 'airborne 2 legs 07:13:40–07:19:11 · 5.5 min') for the replay
+    slider caption; '' when the flight carries no audit."""
+    fi = flight_info(fi) if isinstance(fi, int) else fi
+    segs = list(fi.get("airborne_segments") or [])
+    if not segs:
+        return ""
+    air = float(fi.get("airborne_s") or sum(float(s.get("airborne_s") or 0) for s in segs))
+    span = f"{pdt_hms(segs[0]['air_t0'])}–{pdt_hms(segs[-1]['air_t1'])}"
+    lead = "airborne" if len(segs) == 1 else f"airborne {len(segs)} legs"
+    return f"{lead} {span} · {air / 60.0:.1f} min"
+
+
+def airborne_trim_note(fi: dict | int) -> str:
+    """The audit result of a saved flight for the save card / archive contents:
+    'airborne 5.5 of 21.0 min · replay trimmed to 07:13:20–07:19:26' — or 'no airborne segment found · full window kept
+    (21.0 min)' when nothing flew.  '' when the entry carries no audit at all."""
+    fi = flight_info(fi) if isinstance(fi, int) else fi
+    if fi.get("airborne_s") is None and not fi.get("airborne_segments"):
+        return ""
+    s0, s1 = float(fi.get("saved_t0", fi["t0"])), float(fi.get("saved_t1", fi["t1"]))
+    segs = list(fi.get("airborne_segments") or [])
+    if not segs:
+        return f"no airborne segment found · full window kept ({(s1 - s0) / 60.0:.1f} min)"
+    air = float(fi.get("airborne_s") or 0.0)
+    return (f"airborne {air / 60.0:.1f} of {(s1 - s0) / 60.0:.1f} min · replay trimmed to "
+            f"{pdt_hms(float(fi['t0']))}–{pdt_hms(float(fi['t1']))}")
 
 
 def passes(n: int) -> list[dict]:
