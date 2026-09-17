@@ -747,10 +747,8 @@ def trail_tails(A: dict) -> dict:
 
 # ── engagement: ONE separation card (the closing-rate figure was dropped; the rate lives on the tile) ──
 STAR_TRACK = dict(symbol="star", size=21, color=T.CARD, line=dict(width=2, color=T.TARGET))   # the track CPA ★: a target-red RING (the truth ★ stays gold)
-STAR_CLOSEST = dict(symbol="star-open", size=21, color=T.GOLD, line=dict(width=2, color=T.GOLD))          # "closest so far" (no validated pass yet): hollow gold ★
-STAR_CLOSEST_TRACK = dict(symbol="star-open", size=21, color=T.TARGET, line=dict(width=2, color=T.TARGET))  # ... and its track twin, hollow red
 CPA_LINE_W = 2.5                                                                                  # 2026-09-17 pm: the gold CPA hairline was 1 px — invisible beside the 1 px "now" line
-CPA_LABEL_PX = 14                                                                                 # the "CPA 28 m" text riding above each ★ (mono, ink)
+CPA_LABEL_PX = 14                                                                                 # the "CPA 28 m" words at the top of each CPA line on the separation card (mono, ink)
 OUT_MARK = " ◂"                                                                                 # suffix of a CPA label pinned at the LEFT edge (its time scrolled out of the window)
 
 
@@ -774,24 +772,25 @@ def separation_fig(A: dict, P: dict) -> go.Figure:
                                  hovertemplate="%{y:.0f} m"))
     t_arr = np.asarray(S["t"], float)
     t0 = float(np.nanmin(t_arr)) if len(t_arr) and np.isfinite(t_arr).any() else float(A["t_now"]) - 60.0
-    # 2026-09-17 pm ("make the CPA clearer"): each ★ carries its value ON the plot ("CPA 28 m" / "CPA track 41 m", ink on TAG_BG, above
-    # the star) and the truth CPA's gold hairline is CPA_LINE_W wide.  While NO pass has validated under the gate, the AIRBORNE "closest
-    # so far" minimum (A["cpa_run"] / A["cpa_trk_run"]) is marked instead — hollow ★, dotted hairline, "closest 131 m" — so the card
-    # always points at the nearest approach flown (a whole flight without a gate pass used to show nothing at all).
+    # 2026-09-17 pm (user: "I dont want stars, just a line with CPA"): the CPA is a LABELLED VERTICAL LINE, no marker — gold "CPA 211 m" for the
+    # truth CPA, target-red dashed "CPA track 230 m" for the track CPA, the words at the top of each line (ink on TAG_BG, the track's one row lower
+    # so the two never overlap when the times coincide).  While NO pass has validated under the gate the AIRBORNE closest-so-far (A["cpa_run"] /
+    # A["cpa_trk_run"]) is drawn the same way and with the same word — the card always points at the nearest approach flown.
     validated = A.get("cpa") is not None or A.get("cpa_trk") is not None
-    marks = ((("cpa", "CPA", STAR), ("cpa_trk", "CPA track", STAR_TRACK)) if validated
-             else (("cpa_run", "closest", STAR_CLOSEST), ("cpa_trk_run", "closest track", STAR_CLOSEST_TRACK)))
-    for key, name, mk in marks:
+    marks = ((("cpa", "CPA", T.GOLD, "solid"), ("cpa_trk", "CPA track", T.TARGET, "dash")) if validated
+             else (("cpa_run", "CPA", T.GOLD, "solid"), ("cpa_trk_run", "CPA track", T.TARGET, "dash")))
+    lab_px = px(CPA_LABEL_PX, P)
+    for slot, (key, name, col, dash) in enumerate(marks):
         cpa = A.get(key)
         if cpa is None:
             continue
         out = float(cpa[1]) < t0
-        fig.add_trace(go.Scatter(x=[_dt(t0 if out else cpa[1])], y=[cpa[0]], mode="markers+text", name=name + (OUT_MARK if out else ""), marker=dict(mk),
-                                 text=[f"{name} {cpa[0]:.0f} m"], textposition="top center" if key in ("cpa", "cpa_run") else "bottom center",   # truth above its ★, track below: the two never overlap
-                                 textfont=dict(family=T.MONO, size=px(CPA_LABEL_PX, P), color=T.INK),
-                                 cliponaxis=False, hovertemplate=f"{name} %{{y:.0f}} m · {D.pdt_hms(cpa[1])}<extra></extra>"))
-        if key in ("cpa", "cpa_run"):
-            fig.add_vline(x=_dt(t0 if out else cpa[1]), line=dict(color=T.GOLD, width=CPA_LINE_W, dash="solid" if validated else "dot"))
+        x_c = _dt(t0 if out else cpa[1])
+        fig.add_shape(type="line", xref="x", yref="y domain", x0=x_c, x1=x_c, y0=0, y1=1, line=dict(color=col, width=CPA_LINE_W, dash=dash), layer="above",
+                      name=f"{key}_line")
+        fig.add_annotation(xref="x", yref="y domain", x=x_c, y=1.0, xanchor="left", yanchor="top", xshift=4, yshift=-2 - slot * (ERR_BOX_LH * lab_px + ERR_BOX_PAD + 2.0),
+                           text=f"{name} {cpa[0]:.0f} m" + (OUT_MARK if out else ""), showarrow=False, font=dict(family=T.MONO, size=lab_px, color=T.INK),
+                           bgcolor=TAG_BG, borderpad=1, name=f"{key}_label", hovertext=f"{name} {cpa[0]:.0f} m · {D.pdt_hms(cpa[1])}")
     fig.add_vline(x=_dt(A["t_now"]), line=dict(color=T.RED, width=1))
     # X_PAD_FRAC right padding: an invisible anchor beyond "now" widens the autorange (the user's zoom still survives reacts: autorange stays autorange)
     fig.add_trace(go.Scatter(x=[_dt(float(A["t_now"]) + X_PAD_FRAC * max(60.0, float(A["t_now"]) - t0))], y=[0.0], mode="markers",
@@ -1219,13 +1218,10 @@ def cpa_hud(A: dict) -> str:
     passes — the label left the plot area (see separation_fig)."""
     cpa, trk = A.get("cpa"), A.get("cpa_trk")
     if cpa is None and trk is None:
-        # 2026-09-17 pm: no validated pass yet -> the header still names the AIRBORNE closest approach so far, and says why it is not a CPA
-        run = A.get("cpa_run")
-        if run is None:
+        # 2026-09-17 pm: no validated pass yet -> the header carries the AIRBORNE closest approach so far in the SAME words (user: "just CPA")
+        cpa, trk = A.get("cpa_run"), A.get("cpa_trk_run")
+        if cpa is None and trk is None:
             return ""
-        gate = A.get("cpa_gate_m")
-        why = f" · no pass under {float(gate):.0f} m gate" if gate else ""
-        return f"closest so far {run[0]:.0f} m · {D.pdt_hms(run[1])}{why}"
     if cpa is None:
         return f"CPA truth — · CPA track {trk[0]:.0f} m · {D.pdt_hms(trk[1])}"
     t_c = D.pdt_hms(cpa[1])
@@ -1838,7 +1834,7 @@ MEAS_PAD = 0.15                                                        # ... pad
 RAMP_TGT = ("#f3a6a6", T.TARGET, T.TARGET_DARK)              # target-side tracks: light · mid · dark red
 RAMP_ITC = ("#8fb8f0", T.INTERCEPTOR, "#2a6cc7")              # interceptor-side tracks: light · mid · dark blue (dark step 3.27:1 on the card; #1c5cab was 2.55:1)
 RAMP_FOLD = "#8a8a8a"                                         # 4th+ concurrent track of a role
-STEP_DASH = ("solid", "dash", "dot")                          # the second identity channel: dash by step (coasting = lighter, never a dash)
+STEP_DASH = ("dash", "longdash", "dot")                       # 2026-09-17 pm (user: "clearer with dashed line and solid lines"): TRACKS are always dashed, TRUTH is the solid line; the step still varies the dash
 TRACK_SLOTS = RAMP_TGT                                        # legacy name (tests): the target ramp
 TRACK_SLOT_FOLD = RAMP_FOLD
 MEAS_H = 640                                                  # 2026-09-17 pm: three rows (was 520 for two)
@@ -1860,7 +1856,7 @@ MEAS_TOP_PX = 72                                              # top margin: the 
 MEAS_UIREV = UIREV["meas"]
 MEAS_OBS_PX, MEAS_OBS_COLOR, MEAS_OBS_ALPHA = 6, "#cfd6de", 0.75     # raw obs: filled 6 px light-ink circles at .75 with a 1 px surface ring, drawn FIRST
 TRUTH_W = 3.0                                                 # both truths: 3 px (target red, interceptor blue)
-ON_W, DEPARTED_W, DEPARTED_ALPHA = 2.0, 1.0, 0.35             # a track ON its side: full 2 px ramp colour; DEPARTED (dragged away): 1 px at .35
+ON_W, DEPARTED_W, DEPARTED_ALPHA = 2.5, 1.0, 0.35             # a track ON its side: 2.5 px dashed ramp colour (2026-09-17 pm, was 2); DEPARTED (dragged away): 1 px at .35
 COAST_ALPHA = 0.6                                             # tentative / coasting samples of a track: same line, lighter (like the error panel)
 MEAS_TITLE_PX, MEAS_LEGEND_PX = 12, 12                        # per-panel titles (bold) and the legend: 12 px
 MEAS_GAP_S = 3.0                                              # a track's line breaks across a hole in its states longer than max(this, 3 x median dt)

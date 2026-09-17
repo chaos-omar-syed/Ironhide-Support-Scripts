@@ -378,9 +378,12 @@ def test_bare_mode_07_23_52_labels_widths_ranges():
     assert PL.cpa_hud(A) == f"CPA truth {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])} · CPA track {A['cpa_trk'][0]:.0f} m · {D.pdt_hms(A['cpa_trk'][1])}"
     fs = PL.separation_fig(A, {**P, "sep_height": 240})
     names = [t.name for t in fs.data]
-    assert names[:2] == ["separation to truth", "separation to track"] and "CPA" in names and "CPA track" in names and "horizontal" not in names
-    trk_star = next(t for t in fs.data if t.name == "CPA track")
-    assert trk_star.marker.symbol == "star" and trk_star.marker.line.color == T.TARGET and trk_star.marker.color == T.CARD   # target-red ring
+    assert names[:2] == ["separation to truth", "separation to track"] and "CPA" not in names and "horizontal" not in names   # 2026-09-17 pm: CPA = labelled lines, no marker traces
+    shp = {sh.name for sh in fs.layout.shapes if sh.name}
+    labs = {a.text for a in fs.layout.annotations if str(a.name or "").endswith("_label")}
+    assert {"cpa_line", "cpa_trk_line"} <= shp and labs == {f"CPA {A['cpa'][0]:.0f} m", f"CPA track {A['cpa_trk'][0]:.0f} m"}, (shp, labs)
+    trk_line = next(s for s in fs.layout.shapes if s.name == "cpa_trk_line")
+    assert trk_line.line.color == T.TARGET and trk_line.line.dash == "dash" and trk_line.line.width == PL.CPA_LINE_W   # target-red dashed line (2026-09-17 pm: no stars)
     assert next(t for t in fs.data if t.name == "separation to track").line.dash == "dash"
     assert len([s for s in _L(fs)["shapes"] if (s.get("line") or {}).get("color") == T.GOLD]) == 1                # one gold hairline (truth); none for the track CPA
     in_win = (A["t_now"] - 120.0) <= float(A["cpa"][1]) <= A["t_now"]
