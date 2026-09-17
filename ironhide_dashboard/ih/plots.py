@@ -2323,6 +2323,15 @@ def meas_fig(M: dict, A: dict, P: dict, role: str = "tgt") -> go.Figure:
         # and an edge-anchored band is the one thing a clearance decision can use EXACTLY at any panel height
         tags[MEAS_KEYS[0]].insert(0, _tag_rec("geom_note", geom["note"], small_px, t_lo, 0.0, t_lo, span, None,
                                               band="bottom", full_width=True))
+    # reference-frame note at the foot of the ALTITUDE row (user 2026-09-17 pm: "as long as those reference frames are clear"): the antenna's
+    # HAE and how to read height above the radar from the axis
+    rx = (geom.get("rx") or ())
+    if len(rx) >= 3 and rx[2] is not None:
+        ra, ca = pos["alt"]
+        alt_note = f"m HAE (WGS-84) · antenna {float(rx[2]):.0f} m HAE · above radar = HAE − {float(rx[2]):.0f}"
+        fig.add_annotation(xref="x domain", yref="y domain", x=1.0, y=0.0, xanchor="right", yanchor="bottom", xshift=-4, yshift=2, text=alt_note,
+                           showarrow=False, font=dict(family=T.MONO, size=small_px, color=T.INK3), bgcolor=TAG_BG, borderpad=2, name="alt_note", row=ra, col=ca)
+        tags["alt"].insert(0, _tag_rec("alt_note", alt_note, small_px, t_lo, 0.0, t_lo, span, None, band="bottom", full_width=True))
     # track-id changes inside the window: a tick at the top edge of all four panels, labelled on the top row.  Drawn
     # BEFORE the declutter so its hover-only ▾ mark at the top edge is an obstacle the pills have to clear.
     handover_marks(fig, A.get("track_events"), t_lo, t_now, [pos[MEAS_KEYS[0]]], {pos[MEAS_KEYS[0]]}, P, roles=(role_word,))   # first panel only (2026-09-14); this role's handovers
