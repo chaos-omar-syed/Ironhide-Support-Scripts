@@ -274,7 +274,7 @@ def test_panel_js_has_the_responsive_breakpoints_view_lock_and_tween():
     for needle in ("BP=1150", "UW=2400", "FONT_BP=1400", f"MIN_CARD={LS.MIN_CARD_PX}", f"ERR_MIN={LS.ERR_MIN_PX}", f"ERR_HDR={LS.ERR_HDR_PX}", "ICON_PX=44", "function errRows(", "meta.err", "window.innerWidth", 'addEventListener("resize"',
                    'mode:"three"', 'mode:"two"', 'mode:"one"', "var mp=PANEL-HEADER, mm=mapMargin(), ph=mp-MAP_T0-mm.b, mapW=ph+mm.l+mm.r", "Math.min(PANEL-HEADER", "Plotly.Plots.resize", "Plotly.relayout",
                    # 2026-09-15 laptop panel: width pinned to the div, the key rows off in mode "one", icon <= 10 % of the plot height, the grid's own ResizeObserver, the frame re-applied after a re-shaped map
-                   "u.width=Math.round(gd.clientWidth", "function legendPatch(k,mode)", 'u["margin.t"]=one?MAP_T0', f"MAP_T0={LS.map_top_nolegend_px()}", "ICON_FRAC=0.10", "Math.round(ICON_FRAC*ph)",
+                   "u.width=Math.round(gd.clientWidth", "function legendPatch(k,mode)", 'u["margin.t"]=one?MAP_T0', f"MAP_T0={LS.map_top_nolegend_px()}", "ICON_FRAC=0.14", "Math.round(ICON_FRAC*ph)",
                    "new ResizeObserver(", "function refitView(p0)", 'grid.style.gridTemplateColumns=g.mode==="one"?(g.mapW+"px minmax(0,1fr)"):""',
                    '"font.size":f', "tickfont.size", "Math.max(b,Math.round(15*sc))", "Math.max(b,Math.round(13*sc))", "Math.max((UI&&UI.line_w)||2.5,3)",
                    "SEP_FRAC3", "viewportPanel", "window.parent.innerHeight", "frameElement", "bindParentKeys", "--ih-scale",   # A15 / A17: viewport fit, "m" key, text scale
@@ -303,7 +303,7 @@ def test_panel_js_has_the_responsive_breakpoints_view_lock_and_tween():
     assert body.rindex('<div class="h"', 0, pill) < body.rindex('<span class="r">', 0, pill) and body.index('<div id="map"', pill) < body.index('<div class="h"', pill)   # in the MAP header's .r group
     assert T.glyph("amber", "reset", icon="reset") in body and T.glyph("na", "connecting…") in body        # D7: stroke-SVG icons + word, no dingbats
     assert not re.search(r"[●▲✕○⟲❚]", body) and "ICONS=" in js and "STATUS_WORDS=" in js and "function gw(c,w)" in js and not re.search(r"[●▲✕○⟲❚]", js)
-    assert body.count('class="h"') == 4 and "Separation · 3D &amp; horizontal (m)" in body and "Track quality" in body
+    assert body.count('class="h"') == 4 and "Separation · truth &amp; track (m)" in body and "Track quality" in body
     # the core JS is shareable (static preview / test harness): no fetch loop, no baked sid
     core = LS.panel_core_js()
     assert "applyEnvelope" in core and "fetch(" not in core and "SID=" not in core and "setInterval(tick" not in core   # (the 1 s wrapper-height guard in setFrameHeight is not a poller)
@@ -330,7 +330,7 @@ def test_panel_html_draws_heads_in_a_dom_overlay_and_never_relayouts_them():
         assert gone not in js, gone
     for needle in ("l2p(", "_offset", "_length", "plotly_relayouting", "function ovMake(", "function ovDraw(", "ovMake(gd)", "gd.appendChild(el)", 'el.className="ov"',
                    "im.src=HEAD_SRC[k]", "im.hidden=true", 'im.style.transform="translate(', "rotate(", "j.head_imgs", "HEADIMGS", "j.pills", "PILLS", "isPill(a)",
-                   "reacting", "fetching", 'displayModeBar:"hover"', "hasWebGL", 'type="scatter"', "placeHeads", "ovNow()", "get overlay()", "relayouts:OV.relayouts", "tile_relayouts:SATN"):
+                   "reacting", "fetching", 'displayModeBar:false', "hasWebGL", 'type="scatter"', "placeHeads", "ovNow()", "get overlay()", "relayouts:OV.relayouts", "tile_relayouts:SATN"):
         assert needle in js, needle
     # the tween loop / overlay update never call Plotly; the ONLY relayouts left are the tile-only satFlush / satHeal, our own range applyRange and the geometry fit
     for fn_start, fn_end in (("function tweenFrame(", "function eventsCard("), ("function ovDraw(", "function ovNow("), ("function ovPills(", "function ovDraw("), ("function ovMake(", "function ovGeom(")):
@@ -355,7 +355,7 @@ def test_panel_html_draws_heads_in_a_dom_overlay_and_never_relayouts_them():
     css = LS.panel_css()
     assert ".ov{position:absolute;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;z-index:2;}" in css
     assert ".ov .ov-head{position:absolute;left:0;top:0;width:44px;height:44px;will-change:transform;transform-origin:50% 50%;" in css
-    assert f".ov .ov-pill{{position:absolute;left:0;top:0;white-space:nowrap;font:500 13px/1.15 {T.MONO};letter-spacing:0;color:{T.INK};background:{T.CARD};border:2px solid {T.RULE};padding:2px 3px;" in css
+    assert f".ov .ov-pill{{position:absolute;left:0;top:0;white-space:nowrap;font:500 15px/1.15 {T.MONO};letter-spacing:0;color:{T.INK};background:{T.CARD};border:2px solid {T.RULE};padding:2px 3px;" in css
     assert "transition:transform" not in css and ".ic{" not in css
     assert "add_layout_image" not in a and "HELPERS_JS" not in a
     assert "★ CPA" in LS.HEADERS["map"][1] and "dashed = radar tracks" in LS.HEADERS["map"][1]
@@ -500,7 +500,7 @@ def test_measurement_quad_iframe_shows_no_modebar():
     quad joins the other card figures with displayModeBar false — only the MAP keeps a modebar."""
     m = LS.meas_html("sid", "h", 8902, 1000)
     assert "displayModeBar:false" in m and 'displayModeBar:"hover"' not in m
-    assert 'displayModeBar:"hover"' in LS.panel_core_js()                                   # ... and the map still has one
+    assert 'displayModeBar:"hover"' not in LS.panel_core_js() and "displayModeBar:false" in LS.panel_core_js()   # 2026-09-17: map modebar off too (it collided with the track-status tag)                                   # ... and the map still has one
 
 
 def test_measurement_quad_header_caption_is_hidden_when_it_does_not_fit():

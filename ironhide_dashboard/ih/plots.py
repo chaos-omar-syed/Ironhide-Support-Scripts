@@ -196,7 +196,7 @@ ONE_SIDED = {"pos3d"}                                         # |error| >= 0: ba
 OBS_KEYS = ("az", "el", "alt")                                # raw obs ✕ overlay only where an obs has the quantity (no 3D position from one sensor)
 CONTAIN_LABEL = {"az": "az", "el": "el", "pos3d": "3D pos · 1σ radius", "alt": "alt"}
 ERR_COLORS_META = None
-STAR = dict(symbol="star", size=14, color=T.GOLD, line=dict(width=2, color=T.CARD))
+STAR = dict(symbol="star", size=21, color=T.GOLD, line=dict(width=2, color=T.CARD))            # 2026-09-17 x1.5 (14 -> 21): the ★ read as a speck on the satellite map
 TAG_BG = "rgba(26,29,34,.8)"                                  # card at .8 behind in-panel ink tags
 GAP_FACTOR = 3.0                                              # a > 3x-median update gap also breaks the error line
 UNGRADED_W, UNGRADED_ALPHA = 1.0, 0.5                         # (legacy) dotted tentative / coasting line — replaced by the lighter bridge + coast strip
@@ -210,7 +210,13 @@ STRIP_LABELS_MAX = 3                                          # the header-strip
 LABEL_SEP_FRAC = 0.2                                          # two top labels closer than this fraction of the window stack (the later one one line lower)
 ERR_CLAMP = {"az": 5.0, "el": 5.0, "pos3d": 300.0, "alt": 150.0}   # hard axis limits per error card (± for two-sided, 0..max for pos3d): "don't need ±20 angle error"
 ERR_P, ERR_P_SCALE = 95.0, 1.25                               # robust half-range: 1.25 x the 95th percentile of |err| + 1σ over the window (one spike never blows the range)
-PILL_PX = 13                                                  # track-id pills (map + measurement quad): 13 px mono on a CARD pill with a RULE border (x scale)
+PILL_PX = 15                                                  # track-id pills (map + measurement quad): 15 px mono on a CARD pill with a RULE border (x scale) — 2026-09-17: +2 for contrast on the satellite map
+TRAIL_W = 3.5                                                 # 2026-09-17 map contrast: truth trails 3.5 px ...
+TRACK_W = 3.0                                                 # ... the target track dashed 3 px ...
+HALO_W = 6.0                                                  # ... both over a 6 px dark halo line (map_fig) so they read on any satellite tile
+HALO = "#101215"
+MAP_CPA_PX = 14                                               # the map CPA label: >= 14 px x text scale on TAG_BG (was 11 px bare ink)
+SAT_OPACITY = 0.85                                            # satellite underlay (was 0.9): a touch darker under the brighter series
 TICK_PX = 11                                                  # handover tick labels ("→ #177") at the top edge of the time-series cards (x scale)
 
 
@@ -529,6 +535,13 @@ def heads_images(heads: dict, view_w_m: float, surface: str = T.SURFACE) -> list
 
 
 # ── map ──────────────────────────────────────────────────────────────────────
+def halo_trace(x, y, name: str) -> go.Scattergl:
+    """The dark HALO_W px line drawn UNDER a map series (truth trail / target track) — no legend, no hover, no name of its own the
+    panel could mistake for a series ("_halo <series>")."""
+    return go.Scattergl(x=x, y=y, mode="lines", name=f"_halo {name}", showlegend=False, hoverinfo="skip",
+                        line=dict(color=HALO, width=HALO_W))
+
+
 def map_fig(A: dict, P: dict) -> go.Figure:
     """Top-down map.  P keys: map_half, trail_s, show_sat, show_blind, map_height, sat_include,
     icons_in_fig, frame (FIXED footprint box or None = FOLLOW), font_px, line_w.
@@ -550,7 +563,7 @@ def map_fig(A: dict, P: dict) -> go.Figure:
         r = D.sat_payload(cx - hx, cx + hx, cy - hx, cy + hx, (ant[0], ant[1]))
         if r.get("img"):
             fig.add_layout_image(dict(source=r["img"], xref="x", yref="y", x=r["x0"], y=r["y1"], sizex=r["x1"] - r["x0"],
-                                      sizey=r["y1"] - r["y0"], xanchor="left", yanchor="top", sizing="stretch", layer="below", opacity=0.9))
+                                      sizey=r["y1"] - r["y0"], xanchor="left", yanchor="top", sizing="stretch", layer="below", opacity=SAT_OPACITY))
     if P.get("show_blind"):
         rings = blind_rings()
         for i, (m, rad) in enumerate(rings):
@@ -569,7 +582,8 @@ def map_fig(A: dict, P: dict) -> go.Figure:
         tr = A.get(f"{key}_trail")
         if tr is not None and len(tr):
             tr = downsample(tr)
-            fig.add_trace(go.Scattergl(x=tr[:, TR["E"]], y=tr[:, TR["N"]], mode="lines", name=name, line=dict(color=col, width=lw),
+            fig.add_trace(halo_trace(tr[:, TR["E"]], tr[:, TR["N"]], name))          # dark halo under the trail (contrast on satellite)
+            fig.add_trace(go.Scattergl(x=tr[:, TR["E"]], y=tr[:, TR["N"]], mode="lines", name=name, line=dict(color=col, width=max(lw, TRAIL_W)),
                                        text=_hover_t(tr[:, 0]), customdata=_alt_spd(tr, TR, ant_hae),
                                        hovertemplate="%{text}<br>E %{x:.0f} m · N %{y:.0f} m" + ALT_HOVER + "<extra>" + name + "</extra>"))
             n_series += 1
@@ -581,9 +595,10 @@ def map_fig(A: dict, P: dict) -> go.Figure:
         for im in heads_images(heads(A), x1 - x0):
             if im.get("visible"):
                 fig.add_layout_image(im)
-    # radar tracks: dashed estimate lines (no per-state markers — coasting shows on the error panel as gaps);
-    # target = team red; interceptor = team blue, thinner and faded (secondary) — map only, never in the error stats
-    for key, tid_key, col, w, alpha in (("tgt_track", "tgt_tid", T.TARGET, lw, 1.0), ("itc_track", "itc_tid", T.INTERCEPTOR, ITC_TRACK_W, ITC_TRACK_ALPHA)):
+    # the TARGET's radar track: dashed estimate line (no per-state markers — coasting shows on the error panel as gaps), team red.
+    # 2026-09-17 HARD RULE (user): the INTERCEPTOR's radar track is NEVER drawn or shown anywhere — no trace, no legend entry, no
+    # pill, no metric; A["itc_tid"] / A["itc_track"] stay engine-internal.  Interceptor TRUTH (MAVLink) stays.
+    for key, tid_key, col, w, alpha in (("tgt_track", "tgt_tid", T.TARGET, max(lw, TRACK_W), 1.0),):
         tk = A.get(key)
         if tk is None or not len(tk) or A.get(tid_key) is None:
             continue
@@ -591,15 +606,12 @@ def map_fig(A: dict, P: dict) -> go.Figure:
         if not len(tr):
             continue
         tr = downsample(tr)
-        role = "target" if key == "tgt_track" else "interceptor"
-        name = f"{role} track #{A[tid_key]}"
-        # the INTERCEPTOR track stays OUT of the legend (showlegend False): it is the secondary series (thin, faded), its "#200" pill
-        # names it on the map and the card caption says "dashed = radar tracks" — and the key must fit ONE row in the top margin
-        legend_it = key == "tgt_track"
-        fig.add_trace(go.Scattergl(x=tr[:, TK["E"]], y=tr[:, TK["N"]], mode="lines", name=name, opacity=alpha, showlegend=legend_it,
+        name = f"target track #{A[tid_key]}"
+        fig.add_trace(halo_trace(tr[:, TK["E"]], tr[:, TK["N"]], name))
+        fig.add_trace(go.Scattergl(x=tr[:, TK["E"]], y=tr[:, TK["N"]], mode="lines", name=name, opacity=alpha, showlegend=True,
                                    line=dict(color=col, width=w, dash="dash"), text=_hover_t(tr[:, 0]), customdata=_alt_spd(tr, TK, ant_hae),
                                    hovertemplate="%{text}<br>E %{x:.0f} m · N %{y:.0f} m" + ALT_HOVER + "<extra>" + name + "</extra>"))
-        n_series += int(legend_it)
+        n_series += 1
     # track-number pills ("#177" red / "#203" blue) at the newest point of each track line — the panel relayouts the same dicts every tick
     for pill in track_pills(A, P):
         fig.add_annotation(**pill)
@@ -656,12 +668,15 @@ def map_fig(A: dict, P: dict) -> go.Figure:
                                  hovertemplate="%{text}<br>E %{x:.0f} m · N %{y:.0f} m" + ALT_HOVER + "<extra></extra>"))
         for pill in other_pills(A, P):
             fig.add_annotation(**pill)
-    # CPA (validated by the engine's gate): gold star + ink label
+    # CPA (the engine's most recent validated airborne pass): gold ★ (STAR, x1.5) + an ink label on TAG_BG right of it
+    # (2026-09-17: the 11 px bare text vanished on the satellite tiles; an annotation carries a background, a trace text cannot)
     cpa = A.get("cpa")
     if cpa is not None:
-        fig.add_trace(go.Scatter(x=[cpa[2]], y=[cpa[3]], mode="markers+text", name="CPA", text=[f"  CPA {cpa[0]:.0f} m"], textposition="middle right",
-                                 marker=dict(STAR), textfont=dict(color=T.INK, family=T.MONO, size=11),
+        fig.add_trace(go.Scatter(x=[cpa[2]], y=[cpa[3]], mode="markers", name="CPA", marker=dict(STAR),
                                  hovertemplate=f"CPA {cpa[0]:.0f} m (3D) · {cpa[4]:.0f} m horiz<br>{D.pdt_hms(cpa[1])}<extra></extra>"))
+        fig.add_annotation(name="cpa_map_label", xref="x", yref="y", x=cpa[2], y=cpa[3], text=f"CPA {cpa[0]:.0f} m", showarrow=False,
+                           font=dict(family=T.MONO, size=px(MAP_CPA_PX, P), color=T.INK), bgcolor=TAG_BG, borderpad=2,
+                           xanchor="left", yanchor="middle", xshift=int(STAR["size"] * 0.6) + 4)
         n_series += 1
     # (the "live segments" trail tail -> tweened head are layout SHAPES the panel JS owns: an arraydraw edit, no trace re-render)
     font_px = int(P.get("font_px", FONT_PX))
@@ -720,29 +735,43 @@ def trail_tails(A: dict) -> dict:
 
 
 # ── engagement: ONE separation card (the closing-rate figure was dropped; the rate lives on the tile) ──
+STAR_TRACK = dict(symbol="star", size=21, color=T.CARD, line=dict(width=2, color=T.TARGET))   # the track CPA ★: a target-red RING (the truth ★ stays gold)
+OUT_MARK = " ◂"                                                                                 # suffix of a CPA label pinned at the LEFT edge (its time scrolled out of the window)
+
+
 def separation_fig(A: dict, P: dict) -> go.Figure:
-    """SEPARATION · 3D & HORIZONTAL (m): 3D in primary ink, horizontal in muted ink, ★ CPA + gold
-    hairline once the engine's gate validates it (A["cpa"] is None until then), red "now" hairline,
-    unified hover.  Window = since flight start (autorange: the user's zoom survives reacts)."""
+    """SEPARATION (m), two series (2026-09-17 user: "CPA to TRACK and CPA to TRUTH"): "separation to truth" = interceptor
+    truth <-> target truth (3D, primary ink) and "separation to track" = interceptor truth <-> the radar's TARGET TRACK
+    state (S["sep_trk"], target-red dashed; NaN where the track had no state).  Two ★: gold = the gated truth CPA
+    (A["cpa"], + gold hairline), target-red ring = the gated track CPA (A["cpa_trk"]).  A ★ whose time has scrolled out
+    of the card's window is pinned at the LEFT edge (hover keeps the real time; legend name gets "◂") so the reference
+    never disappears.  Red "now" hairline, unified hover.  Window = since flight start (autorange: the user's zoom
+    survives reacts)."""
     S = A["sep"]
     x = D.to_pdt_dt64(S["t"])
     lw = float(P.get("line_w", LINE_W))
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=S["sep"], mode="lines", name="separation 3D", line=dict(color=T.INK, width=lw), connectgaps=False,
+    fig.add_trace(go.Scatter(x=x, y=S["sep"], mode="lines", name="separation to truth", line=dict(color=T.INK, width=lw), connectgaps=False,
                              hovertemplate="%{y:.0f} m"))
-    fig.add_trace(go.Scatter(x=x, y=S["horiz"], mode="lines", name="horizontal", line=dict(color=T.GREY_TRACK, width=lw), connectgaps=False,
-                             hovertemplate="%{y:.0f} m"))
-    cpa = A.get("cpa")
-    if cpa is not None:
-        # the ★ stays (data); its label moved OUT of the plot area into the card header (ih.liveserver "hud", see cpa_hud) — text over the
-        # newest samples covered the right side of the plot (t = now is what the operator watches)
-        fig.add_trace(go.Scatter(x=[_dt(cpa[1])], y=[cpa[0]], mode="markers", name="CPA", marker=dict(STAR),
-                                 hovertemplate=f"CPA %{{y:.0f}} m · {D.pdt_hms(cpa[1])}<extra></extra>"))
-        fig.add_vline(x=_dt(cpa[1]), line=dict(color=T.GOLD, width=1))
-    fig.add_vline(x=_dt(A["t_now"]), line=dict(color=T.RED, width=1))
-    # X_PAD_FRAC right padding: an invisible anchor beyond "now" widens the autorange (the user's zoom still survives reacts: autorange stays autorange)
+    st_ = S.get("sep_trk")
+    if st_ is not None and len(st_) == len(x):
+        fig.add_trace(go.Scatter(x=x, y=st_, mode="lines", name="separation to track", line=dict(color=T.TARGET, width=lw, dash="dash"), connectgaps=False,
+                                 hovertemplate="%{y:.0f} m"))
     t_arr = np.asarray(S["t"], float)
     t0 = float(np.nanmin(t_arr)) if len(t_arr) and np.isfinite(t_arr).any() else float(A["t_now"]) - 60.0
+    for key, name, mk in (("cpa", "CPA", STAR), ("cpa_trk", "CPA track", STAR_TRACK)):
+        cpa = A.get(key)
+        if cpa is None:
+            continue
+        # the ★ stays (data); its label moved OUT of the plot area into the card header (ih.liveserver "hud", see cpa_hud) — text over the
+        # newest samples covered the right side of the plot (t = now is what the operator watches)
+        out = float(cpa[1]) < t0
+        fig.add_trace(go.Scatter(x=[_dt(t0 if out else cpa[1])], y=[cpa[0]], mode="markers", name=name + (OUT_MARK if out else ""), marker=dict(mk),
+                                 hovertemplate=f"{name} %{{y:.0f}} m · {D.pdt_hms(cpa[1])}<extra></extra>"))
+        if key == "cpa":
+            fig.add_vline(x=_dt(t0 if out else cpa[1]), line=dict(color=T.GOLD, width=1))
+    fig.add_vline(x=_dt(A["t_now"]), line=dict(color=T.RED, width=1))
+    # X_PAD_FRAC right padding: an invisible anchor beyond "now" widens the autorange (the user's zoom still survives reacts: autorange stays autorange)
     fig.add_trace(go.Scatter(x=[_dt(float(A["t_now"]) + X_PAD_FRAC * max(60.0, float(A["t_now"]) - t0))], y=[0.0], mode="markers",
                              marker=dict(size=1, opacity=0, color=T.CARD), hoverinfo="skip", showlegend=False, name="_anchor_pad"))
     # EMPTY STATE (truth-to-truth needs BOTH heads): a muted readout in the header strip saying WHY the card is blank —
@@ -845,7 +874,7 @@ def _ev(e) -> tuple:
 
 
 def handover_marks(fig: go.Figure, events, t_lo: float, t_now: float, cells: list[tuple[int, int]], label_cells: set[tuple[int, int]], P: dict | None = None,
-                   stack_px: float | None = None, roles: tuple = ("target", "interceptor"), labels_out: list | None = None) -> int:
+                   stack_px: float | None = None, roles: tuple = ("target",), labels_out: list | None = None) -> int:
     """Thin vertical tick at the TOP edge of every cell (row, col) for each track-id change inside the window
     (target: secondary-ink tick, interceptor: blue tick) + a "→ #177" / "itc → #203" label on the ``label_cells``
     — id changes read in time context on the error panel and the measurement quad.  Two label styles:
@@ -879,16 +908,21 @@ def handover_marks(fig: go.Figure, events, t_lo: float, t_now: float, cells: lis
 
 
 def cpa_marks(fig: go.Figure, A: dict, t_lo: float, t_now: float, rows: int, labels_out: list | None = None) -> None:
-    """The validated CPA (A["cpa"] = (sep3d, t, ...)) as a gold hairline on every card of a stacked card figure, labelled once
-    ("CPA 59 m · 07:22:31") through ``labels_out`` (placed by strip_labels in the first card's header strip)."""
+    """The validated TRUTH CPA (A["cpa"] = (sep3d, t, ...); the track CPA gets no hairline) as a gold hairline on every card of a
+    stacked card figure, labelled once ("CPA 59 m · 07:22:31") through ``labels_out`` (placed by strip_labels in the first
+    card's header strip); pinned at the left edge with "◂" once its time leaves the window (never removed)."""
     cpa = A.get("cpa")
-    if not cpa or not (t_lo <= float(cpa[1]) <= t_now):
+    if not cpa or float(cpa[1]) > t_now:
         return
+    # 2026-09-17 user: the reference must stay for the rest of the session — a CPA whose time has scrolled out of the window is
+    # PINNED at the window's left edge, its words suffixed "◂" ("CPA 28 m · 06:55:48 ◂"); the real time stays in the label
+    out = float(cpa[1]) < t_lo
+    x = _dt(t_lo if out else cpa[1])
     for r in range(1, rows + 1):
-        fig.add_shape(type="line", xref="x" if r == 1 else f"x{r}", yref="y domain" if r == 1 else f"y{r} domain", x0=_dt(cpa[1]), x1=_dt(cpa[1]), y0=0, y1=1,
+        fig.add_shape(type="line", xref="x" if r == 1 else f"x{r}", yref="y domain" if r == 1 else f"y{r} domain", x0=x, x1=x, y0=0, y1=1,
                       line=dict(color=T.GOLD, width=1), layer="above", name=f"cpa_line_{r}")
     if labels_out is not None:
-        labels_out.append((float(cpa[1]), f"CPA {cpa[0]:.0f} m · {D.pdt_hms(cpa[1])}", "cpa_label"))
+        labels_out.append((float(t_lo if out else cpa[1]), f"CPA {cpa[0]:.0f} m · {D.pdt_hms(cpa[1])}" + (OUT_MARK if out else ""), "cpa_label"))
 
 
 def top_labels(fig: go.Figure, items: list[tuple[float, str, str]], t_lo: float, t_now: float, P: dict | None = None, row: int = 1, col: int = 1) -> int:
@@ -1004,13 +1038,13 @@ def fill_sigma(t: np.ndarray, sg: np.ndarray, max_gap_s: float = 10.0) -> np.nda
 
 
 def track_pills(A: dict, P: dict | None = None) -> list[dict]:
-    """Map track-number pills: "#177" at the newest point of the target's radar track and "#203" at the interceptor's,
-    13 px mono in PRIMARY INK on a CARD pill whose 2 px border carries the role colour (target red / interceptor blue;
-    AMBER for TRACK_FLASH_S after an id change) — text never wears a series colour, the mark beside it does —
-    anchored up-right of the point so it never sits on the vehicle icon.
-    Plotly annotation dicts: map_fig adds them and the panel relayouts them every tick with the heads."""
+    """Map track-number pill: "#177" at the newest point of the TARGET's radar track, 13 px mono in PRIMARY INK on a CARD
+    pill whose 2 px border carries the role colour (target red; AMBER for TRACK_FLASH_S after an id change) — text never
+    wears a series colour, the mark beside it does — anchored up-right of the point so it never sits on the vehicle icon.
+    2026-09-17: the interceptor's radar track gets NO pill (hard rule: never shown).  Plotly annotation dicts: map_fig adds
+    them and the panel relayouts them every tick with the heads (the panel's "itc" pill slot simply stays hidden)."""
     out = []
-    for key, tid_key, col, flash_key, above in (("tgt_track", "tgt_tid", T.TARGET, "tgt_flash", True), ("itc_track", "itc_tid", T.INTERCEPTOR, "itc_flash", False)):
+    for key, tid_key, col, flash_key, above in (("tgt_track", "tgt_tid", T.TARGET, "tgt_flash", True),):
         tk, tid = A.get(key), A.get(tid_key)
         if tk is None or not len(tk) or tid is None:
             continue
@@ -1155,10 +1189,22 @@ def err_strip_px(readout_px: int, sub_px: int) -> tuple[int, int]:
 
 
 def cpa_hud(A: dict) -> str:
-    """The separation card's header text for a validated CPA ("CPA 59 m · 07:22:31"), '' until the gate passes — the label left the
-    plot area (see separation_fig)."""
-    cpa = A.get("cpa")
-    return f"CPA {cpa[0]:.0f} m · {D.pdt_hms(cpa[1])}" if cpa is not None else ""
+    """The separation card's header text once EITHER CPA is validated: "CPA truth 28 m · CPA track 41 m · 06:55:48" (one time when
+    both fall in the same second; the track value carries its own time when it differs: "CPA truth 28 m · 06:55:48 · CPA track
+    20 m · 06:55:50"); "CPA track —" while no target track spanned the pass, "CPA truth —" for a track-only CPA; '' until a gate
+    passes — the label left the plot area (see separation_fig)."""
+    cpa, trk = A.get("cpa"), A.get("cpa_trk")
+    if cpa is None and trk is None:
+        return ""
+    if cpa is None:
+        return f"CPA truth — · CPA track {trk[0]:.0f} m · {D.pdt_hms(trk[1])}"
+    t_c = D.pdt_hms(cpa[1])
+    if trk is None:
+        return f"CPA truth {cpa[0]:.0f} m · CPA track — · {t_c}"
+    t_k = D.pdt_hms(trk[1])
+    if t_k == t_c:
+        return f"CPA truth {cpa[0]:.0f} m · CPA track {trk[0]:.0f} m · {t_c}"
+    return f"CPA truth {cpa[0]:.0f} m · {t_c} · CPA track {trk[0]:.0f} m · {t_k}"
 
 
 def contain_text(c: dict | None) -> str:
@@ -1846,7 +1892,9 @@ def _cat_xy(t: np.ndarray, y: np.ndarray, mask: np.ndarray, gap_s: float) -> tup
 def track_sides(tr: dict) -> tuple[np.ndarray, str]:
     """Per-sample SIDE of a measurement-space track ("tgt" | "itc" | "none") and its HOME side ("tgt" when it was
     ever target-side in the window, else "itc" / "free").  Uses the engine's role-independent on_tgt / on_itc
-    arrays when present (a STOLEN track: target-side, then interceptor-side), else the role-dependent ``on``."""
+    arrays when present (a STOLEN track: target-side, then interceptor-side), else the role-dependent ``on``.
+    2026-09-17 hard rule: the quad never draws the interceptor's radar track — meas_fig SKIPS every track whose home
+    is "itc" and draws a stolen track's interceptor-side samples as departed ("none" style), never blue."""
     n = len(tr["t"])
     side = np.full(n, "none", object)
     on_t, on_i = tr.get("on_tgt"), tr.get("on_itc")
@@ -2085,6 +2133,9 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                 continue
             t = np.asarray(tr["t"], float)
             side, home = track_sides(tr)
+            if home == "itc":                                   # 2026-09-17 hard rule: the interceptor's own radar track is never drawn
+                continue
+            side = np.where(side == "itc", "none", side)        # a stolen track's interceptor-side span: departed style, never blue
             kind = np.asarray(tr.get("kind", np.full(len(t), "meas", object)), object)
             meas = kind == "meas"
             dt = np.diff(t) if len(t) > 1 else np.zeros(0)
@@ -2151,7 +2202,9 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
                 continue
             t = np.asarray(tr["t"], float)
             side, home = track_sides(tr)
-            on = (side == ("itc" if home == "itc" else "tgt")) & np.isfinite(y) if home != "free" else np.isfinite(y)
+            if home == "itc":                                   # 2026-09-17 hard rule: no marker / pill for the interceptor's radar track
+                continue
+            on = (side == "tgt") & np.isfinite(y) if home != "free" else np.isfinite(y)
             if not on.any():
                 continue
             tid = tr["tid"]
@@ -2221,7 +2274,7 @@ def meas_fig(M: dict, A: dict, P: dict) -> go.Figure:
     handover_marks(fig, A.get("track_events"), t_lo, t_now, [pos[MEAS_KEYS[0]]], {pos[MEAS_KEYS[0]]}, P)   # first panel only (2026-09-14)
     for e in A.get("track_events") or ():
         et, erole, _old, enew, _ = _ev(e)
-        if enew is not None and t_lo <= et <= t_now and erole in ("target", "interceptor"):
+        if enew is not None and t_lo <= et <= t_now and erole == "target":          # 2026-09-17: interceptor-track handovers are never shown
             tags[MEAS_KEYS[0]].append(_tag_rec(f"handover_tag_{erole}_{enew}", "▾", max(9, px(TICK_PX, P) - 2), et, 0.0, t_lo, span, None, band="top"))
     # HEADER-STRIP tags: the departures, newest first, right-aligned beside the panel title (never in the plot area)
     for key in MEAS_KEYS:

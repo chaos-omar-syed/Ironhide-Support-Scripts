@@ -264,10 +264,11 @@ def test_interceptor_only_truth_draws_and_reads_no_target_feed():
     assert A["cpa"] is None and A["cpa_run"] is None and A["sep_now"] is None and not np.isfinite(A["sep"]["sep"]).any()
     h = PL.heads(A)
     assert h["tgt"] is None and h["itc"] is not None and A["itc_trail"] is not None and len(A["itc_trail"])
-    # the map: interceptor truth trail + head, its radar track, and every other active track grey / dashed / ungraded
-    fig = PL.map_fig(A, {**P, "map_half": 1500.0, "map_height": 640, "show_sat": False, "show_blind": False, "frame": None})
+    # the map: interceptor truth trail + head — NEVER its radar track (2026-09-17 hard rule) — and, with the sidebar toggle on (the
+    # 2026-09-15 default hides uncorrelated tracks while any MAVLink truth is up), every other active track grey / dashed / ungraded
+    fig = PL.map_fig(A, {**P, "map_half": 1500.0, "map_height": 640, "show_sat": False, "show_blind": False, "frame": None, "show_free_tracks": True})
     names = [t.name for t in fig.data]
-    assert "interceptor truth" in names and f"interceptor track #{A['itc_tid']}" in names
+    assert "interceptor truth" in names and not any(str(n).startswith("interceptor track") for n in names)
     assert names.count("radar tracks (no truth)") >= 5 and "radar track heads" in names
     grey = [t for t in fig.data if t.name == "radar tracks (no truth)"]
     assert all(t.line.color == T.GREY_TRACK and t.line.dash == "dash" for t in grey)
@@ -424,7 +425,7 @@ def test_map_hover_carries_altitude_for_every_vehicle():
         assert cd.ndim == 2 and cd.shape[1] == 2 and len(cd) == len(t.x)
         assert np.isfinite(cd[:, 0]).any()
     # a track's altitude is HAE (radar-relative U + antenna HAE), so it sits within a few hundred m of the truth's
-    tk = next(t for t in fig.data if "track #" in str(t.name))
+    tk = next(t for t in fig.data if "track #" in str(t.name) and not str(t.name).startswith("_halo"))   # 2026-09-17: the dark halo under the track has no hover
     tt = next(t for t in fig.data if str(t.name) == "target truth")
     assert abs(float(np.asarray(tt.customdata, float)[:, 0].max()) - (float(A["tgt_trail"][:, 3].max()) + D.ANT_HAE)) < 1.0
     assert abs(float(np.nanmedian(np.asarray(tk.customdata, float)[:, 0]) - np.nanmedian(np.asarray(tt.customdata, float)[:, 0]))) < 300.0

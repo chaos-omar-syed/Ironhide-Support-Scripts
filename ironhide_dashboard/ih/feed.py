@@ -105,6 +105,22 @@ TRACK_PROJECTION = {"time_spec_float": 1, "time_spec": 1, "payload.track_id": 1,
                     "payload.antenna_location_origin_altitude_m": 1,
                     "payload.truth_match": 1, "payload.contributors": 1}   # the radar's runtime truth match (target_id, match_type "plurality_based, confidence_0.xx")
 ECEF_KEYS = ("payload.x_state_ecef", "payload.p_cov_ecef", "payload.latitude_rad", "payload.longitude_rad", "payload.altitude_m")
+# connect-time CPA HISTORY scan (2026-09-17 user: "not seeing CPA" after connecting late): the MAVLink truth of both role feeds and
+# the target-track states of the LOOKBACK before the live buffer, fetched in budgeted chunks over several ticks -> snap["cpa_hist"]
+# -> engine.seed_cpa_from_history.  MRU91 measured: truth_window 120 s ~0.3 s; 143 LIGHT projection 60 s ~0.8 s (970 kB).
+LOOKBACK_S = 20 * 60                     # history span before the live buffer (session key "cpa_lookback_s" overrides)
+HIST_TRUTH_CHUNK_S = 120.0               # one truth aggregation per chunk (~300 B/doc after the server-side MAVLINK filter)
+HIST_TRACK_CHUNK_S = 60.0                # one LIGHT 143 window per chunk
+HIST_BUDGET_S = 2.0                      # wall time per tick for the history scan (runs only once the live back-fill is complete)
+HIST_OVERLAP_S = 30.0                    # the history reaches this far INTO the live span (a pass straddling the boundary still validates)
+HIST_TRACK_SEP_M = 400.0                 # 143 history is fetched only around grid seconds where truth-truth separation < this ...
+HIST_TRACK_PAD_S = 20.0                  # ... padded by this; no target truth in the history -> the whole span
+TRACK_PROJECTION_HIST = {"time_spec_float": 1, "time_spec": 1, "payload.track_id": 1, "payload.x_state": 1,
+                         "payload.latitude_rad": 1, "payload.longitude_rad": 1, "payload.altitude_m": 1,
+                         "payload.track_velocity_n": 1, "payload.track_velocity_e": 1,
+                         "payload.last_update_time": 1, "payload.total_associations": 1, "payload.track_state": 1,
+                         "payload.antenna_location_origin_latitude_rad": 1, "payload.antenna_location_origin_longitude_rad": 1,
+                         "payload.antenna_location_origin_altitude_m": 1}   # no p_cov / p_cov_ecef / truth_match / contributors: 35 kB -> ~8 kB per doc
 TRACK_PROJECTION_NED = {k: v for k, v in TRACK_PROJECTION.items() if k not in ECEF_KEYS}   # a unit publishing BOTH layouts: layout A wins in
 #                                                                                             track_rows, so the ECEF copy (p_cov_ecef 457 B x 23 payloads) is dead weight (35 kB -> 20 kB per doc)
 WGS_A, WGS_F = 6378137.0, 1.0 / 298.257223563
@@ -890,6 +906,105 @@ def _fill(col, frame, b: dict, lo: float, t_now: float, proj143: dict) -> list[s
     return errs
 
 
+def _hist_spans(hb: dict, frame, lo: float, hi: float) -> list[tuple[float, float]]:
+    """Time spans of the history worth a 143 fetch: around every grid second where the truth-truth separation is below
+    HIST_TRACK_SEP_M (padded HIST_TRACK_PAD_S, merged); the whole [lo, hi] when the history holds no target truth."""
+    tgt, itc, *_ = _buffers_to_snapshot({**_empty_rows(), "truth": hb["truth"]}, lo, hi)
+    if not len(tgt) or not len(itc):
+        return [(lo, hi)]
+    from . import engine as E
+
+    grid = np.arange(np.floor(lo), np.floor(hi) + 1.0)
+    a, b_ = E.interp_truth(tgt, grid), E.interp_truth(itc, grid)
+    d = a[:, :3] - b_[:, :3]
+    close = np.sqrt((d * d).sum(axis=1)) < HIST_TRACK_SEP_M
+    if not close.any():
+        return []
+    spans: list[list[float]] = []
+    for t in grid[close]:
+        t0, t1 = float(t) - HIST_TRACK_PAD_S, float(t) + HIST_TRACK_PAD_S
+        if spans and t0 <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], t1)
+        else:
+            spans.append([t0, t1])
+    return [(max(lo, s0), min(hi, s1)) for s0, s1 in spans]
+
+
+def _chunks(spans, size: float) -> list[tuple[float, float]]:
+    """Spans -> fixed-size chunks, NEWEST first (a late connect right after a pass gets that pass first)."""
+    out = []
+    for s0, s1 in spans:
+        t1 = float(s1)
+        while t1 > float(s0) + 1e-6:
+            t0 = max(float(s0), t1 - size)
+            out.append((t0, t1))
+            t1 = t0
+    return sorted(out, key=lambda c: -c[1])
+
+
+def _hist_scan(col, frame, b: dict, t_now: float, lo_live: float, s) -> None:
+    """Connect-time CPA history into ``b["hist"]`` — truth (both role feeds, MAVLINK aggregation) over the whole lookback first,
+    then the LIGHT 143 windows around the close approaches — HIST_BUDGET_S of wall time per tick, chunks newest first, a failed
+    chunk retried next tick; ``rev`` advances whenever rows landed (the engine re-seeds on a new rev).  Starts once the live
+    buffer has a foothold and the frame is known; ``hi`` = the live span's start + HIST_OVERLAP_S, ``lo`` = t_now − LOOKBACK."""
+    if frame is None or b.get("hi") is None:
+        return
+    H = b.get("hist")
+    if H is None:
+        look = float(s.get("cpa_lookback_s") or LOOKBACK_S)
+        hi = min(float(t_now), float(lo_live) + HIST_OVERLAP_S)
+        lo = float(t_now) - look
+        H = b["hist"] = {"lo": lo, "hi": hi, "truth": {}, "tracks": {}, "n": 0, "rev": None, "complete": False, "errs": [],
+                         "queue": [("truth", c0, c1) for c0, c1 in _chunks([(lo, hi)], HIST_TRUTH_CHUNK_S)], "tracks_queued": False, "snap": None}
+        if hi <= lo:
+            H["complete"] = True
+            return
+    if H["complete"]:
+        return
+    t_wall = time.monotonic()
+    landed = False
+    H["errs"] = []
+    while H["queue"] and time.monotonic() - t_wall < HIST_BUDGET_S:
+        kind, c0, c1 = H["queue"][0]
+        try:
+            if kind == "truth":
+                for t, d in truth_window(col, c0, c1):
+                    rows, _ = truth_rows(t, d, frame)
+                    for tid, r in rows:
+                        H["truth"][(round(t, 3), tid)] = (tid, r)
+            else:
+                for t, d in window(col, TRACKS, c0, c1, TRACK_PROJECTION_HIST):
+                    for tid, r in track_rows(t, d, tuple(frame.ant)):
+                        H["tracks"][(round(t, 3), tid)] = (tid, r)
+        except Exception as ex:
+            H["errs"].append(f"hist {kind}: {type(ex).__name__}: {ex}"[:160])
+            break                                                          # retry this chunk next tick
+        H["queue"].pop(0)
+        landed = True
+        if not H["queue"] and not H["tracks_queued"]:                     # truth done: queue the 143 windows around the close approaches
+            H["tracks_queued"] = True
+            H["queue"] = [("tracks", c0_, c1_) for c0_, c1_ in _chunks(_hist_spans(H, frame, H["lo"], H["hi"]), HIST_TRACK_CHUNK_S)]
+    if landed:
+        H["n"] += 1
+        H["rev"] = f"{b.get('run')}:{H['n']}"
+        H["snap"] = None
+    H["complete"] = not H["queue"] and H["tracks_queued"]
+
+
+def _hist_out(b: dict) -> dict | None:
+    """snap["cpa_hist"] from the history buffer (arrays rebuilt only when ``rev`` advanced)."""
+    H = b.get("hist")
+    if not H or H.get("rev") is None:
+        return None
+    if H.get("snap") is None:
+        tgt, itc, _other, tracks, *_ = _buffers_to_snapshot({**_empty_rows(), "truth": H["truth"], "tracks": H["tracks"]}, H["lo"], H["hi"])
+        H["snap"] = {"tgt": tgt, "itc": itc, "tracks": tracks, "lo": H["lo"], "hi": H["hi"], "rev": H["rev"], "complete": H["complete"],
+                     "pending": len(H["queue"]), "errs": list(H.get("errs") or [])}
+    else:
+        H["snap"].update(complete=H["complete"], pending=len(H["queue"]), errs=list(H.get("errs") or []))
+    return H["snap"]
+
+
 def _prune(b: dict, keep_from: float) -> None:
     for k in ("truth", "tracks", "obs", "obs_tm"):
         b[k] = {kk: v for kk, v in b[k].items() if kk[0] >= keep_from}
@@ -996,7 +1111,7 @@ def live_snapshot(t_now: float, hist_s: float) -> dict:
            "tgt_hist": np.zeros((0, 7)), "itc_hist": np.zeros((0, 7)), "tracks": {}, "obs": np.zeros((0, D.OBS_COLS)), "obs_meta": empty_obs_meta(0),
            "feeds": [], "tx": None, "tx_lla": None, "track_meta": {}, "unit": live_unit(s),
            "t_start": t_now - hist_s, "data_age": None, "anchored": False, "has_truth": False, "has_any_truth": False,
-           "other": [], "n_adsb": 0, "truth_unplaced": False, "backfill_s": None}
+           "other": [], "n_adsb": 0, "truth_unplaced": False, "backfill_s": None, "cpa_hist": None}
     if not host or not run:
         out["err"] = "live source not configured (Data source page: host, port, run)"
         return out
@@ -1025,6 +1140,8 @@ def live_snapshot(t_now: float, hist_s: float) -> dict:
         out["tx"] = tx
         lo = t_now - span
         errs = _fill(col, frame, b, lo, t_now, proj143)                    # chunked: forward page, then back-fill within budget
+        if not errs and b["lo"] is not None and b["lo"] <= lo + 1e-6:
+            _hist_scan(col, frame, b, t_now, lo, s)                        # connect-time CPA history, budgeted, after the live window is whole
         _prune(b, t_now - HIST_CAP_S)
         tgt, itc, other, tracks, obs, obs_meta, feeds, has_truth, has_any = _buffers_to_snapshot(b, lo, t_now)
         unplaced = False
@@ -1036,6 +1153,7 @@ def live_snapshot(t_now: float, hist_s: float) -> dict:
                    n_adsb=int(b["n_adsb"]), truth_unplaced=unplaced, tx_lla=tx,
                    track_meta={k: v for k, v in (b.get("meta") or {}).items() if k in tracks},
                    backfill_s=float(max(0.0, b["lo"] - lo)) if b["lo"] is not None else float(span),
+                   cpa_hist=_hist_out(b),
                    stale=bool(errs), err="; ".join(errs) if errs else None)   # a failed chunk: last-good rows stay, ok stays True
         b["last_ok_wall"] = time.time()
         s["last_snap"] = out

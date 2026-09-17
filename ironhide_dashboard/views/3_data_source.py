@@ -122,9 +122,19 @@ def _mru_changed() -> None:
 
 
 def _follow(run: str, row: dict | None = None) -> None:
-    """Follow one run collection: buffers / origin / info / spans dropped, engine source -> live."""
+    """Follow one run collection: buffers / origin / info / spans dropped, engine source -> live.
+
+    IDEMPOTENT (2026-09-17): re-selecting / re-Connecting to the run ALREADY being followed only makes sure the
+    engine is in live mode.  It used to drop the live buffer and call D.reset_derived() again, so a stray
+    selectbox change or a second Connect wiped up to 180 s of truth / tracks and the session's CPA state
+    mid-flight — and a CPA whose pass had already scrolled out of the (now empty) window never came back."""
     pr = s.get("live_probe") or {}
     row = row or next((r for r in pr.get("runs", []) if r["name"] == run), {})
+    if run and run == s.get("live_run") and s.get("_live_buf") is not None:
+        if row.get("friendly"):
+            s["live_run_name"] = row["friendly"]
+        D.set_source("live")
+        return
     s["live_run"], s["live_run_name"] = run, row.get("friendly", "")
     for k in ("_live_buf", "live_ant", "live_tx", "_live_info", "_mav_span", "_ids_seen", "_save_from_w", "_save_to_w", "_save_label_w"):
         s.pop(k, None)

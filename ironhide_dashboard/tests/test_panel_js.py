@@ -461,9 +461,9 @@ def test_separation_header_fits_in_the_real_two_column_column(report):
 
 
 def test_icon_edge_follows_the_plot_area_height(report):
-    """iconPx() = max(16, min(round(44 x scale), round(0.10 x plot-area height))): 44 / 51 px on a >= 440 / 510 px plot area, 10 % of a
-    shorter one (37 px on the 1366x768 laptop's 369 px map) — two vehicles a few px apart at the CPA no longer merge into one blob."""
+    """iconPx() = max(32, min(round(44 x scale), round(0.14 x plot-area height))): 44 / 51 px on a >= 315 / 365 px plot area, 14 % of a
+    shorter one, never under 32 (2026-09-17: the 10 % cap made 27 px vehicles on a 1366x768 laptop map, unreadable on satellite)."""
     ic = {float(k): v for k, v in report["icon"].items()}
     for sc, r in ic.items():
-        assert r["px"] == max(16, min(round(44 * sc), round(0.10 * r["plot_h"]))), (sc, r)
+        assert r["px"] == max(32, min(round(44 * sc), round(0.14 * r["plot_h"]))), (sc, r)
     assert ic[1.0]["plot_h"] == ic[1.15]["plot_h"] > 0

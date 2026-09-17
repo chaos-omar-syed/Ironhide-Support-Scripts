@@ -35,13 +35,37 @@ spa's ``e_dot_sigma / n_dot_sigma / u_dot_sigma`` — NaN wherever the track sta
 covariance (the adapter's constant velocity-σ fill never reaches a band or a containment rate),
 so A["contain"]["ve"|"vn"|"vu"] counts only rows with a real σ (n == 0 on the 8/28 archives).
 
-CPA gate (``cpa_gate``): the running closest-so-far (``cpa_run``, never gated)
-becomes a VALID CPA (``cpa_ok`` -> A["cpa"], the gold ★ everywhere) only when the
-minimum separation is below CPA_GATE_M (sidebar, default 70 m) AND it is a true
-local minimum: separation rose by >= CPA_RISE_M (or >= CPA_RISE_FRAC of the
-minimum) within the following CPA_LOOK_S — i.e. the pass is over.  Until both hold
-the plots show no ★ / hairline / label and the tile reads "closest so far (no CPA
-yet)".  Once validated a CPA stays until a lower one is validated."""
+CPA policy (2026-09-17, MRU91 run 3212ae22: the two drones sat together on the pad ~15 m BELOW the antenna and the
+session-global running minimum — 23.4 m @ 06:50:56, speeds < 0.3 m/s — masked the real airborne pass 28.4 m @ 06:55:47
+for the rest of the run; Flight 2 showed the same pad value while its closest airborne pass was 131 m):
+* AIRBORNE gate (``airborne_mask``): a separation sample is a CPA candidate only when BOTH entities are >= AIRBORNE_MIN_M
+  above the radar (truth / track U) AND the target's ground speed is >= AIRBORNE_TGT_SPEED_MPS at that instant.  It applies
+  to the truth pair, the track pair, live and archive, the running minima and the connect-time history seed.
+* PER-PASS CPA (``validated_passes``): every tick the current window is scanned for validated passes — local minima of the
+  separation series below CPA_GATE_M (sidebar, default 70 m) whose separation rose by >= CPA_RISE_M (or >= CPA_RISE_FRAC of
+  the minimum) within the following CPA_LOOK_S, with at least one finite sample BEFORE the minimum (a window-edge minimum
+  right after a buffer refill never qualifies) and airborne at the minimum.  The passes persist in session state
+  (``cpa_passes`` / ``cpa_trk_passes``: [(sep, t, E, N, horiz)], oldest first, capped at PASS_LIST_MAX) and A["cpa"] /
+  A["cpa_trk"] (the gold ★, the hairlines, the map ★, the HUD words) = the MOST RECENT validated pass of the session — a
+  newer validated pass replaces the displayed one; ``cpa_ok`` / ``cpa_trk_ok`` mirror the displayed pass for the page.
+* ``cpa_run`` / ``cpa_trk_run`` (the "closest so far" tile) stay the SESSION minimum but airborne-gated; a running minimum
+  older than the separation series' start that never became a validated pass is dropped inside analyze() (it could never be
+  gated again).  A["cpa_valid"] = the running minimum IS one of the validated passes (the tile turns gold).
+* a gate tightened below a stored pass drops that pass; data.seek() / reset_derived() clearing both ``cpa_run`` and
+  ``cpa_ok`` also clears the pass lists (the engine detects the reset: ih/data.py keeps only the pair keys).
+
+Two separations, two CPAs (2026-09-17, user: "what is 3D vs horizontal — I want CPA to TRACK and
+CPA to TRUTH"): ``S["sep"]`` = interceptor truth <-> target truth (3D) with ``cpa_run`` / ``cpa_ok``
+-> A["cpa"] (the gold ★, the hairlines, the map ★); ``S["sep_trk"]`` = interceptor truth <-> the
+radar's TARGET TRACK state (A["tgt_track"], the track A["tgt_tid"] selected — never a nearest-track
+proxy: the interceptor's own radar track would read ~20 m) interpolated to the same 1 Hz grid, NaN
+where the track has no state within TRACK_SEP_GAP_S, with its own running minimum ``cpa_trk_run`` /
+pass list ``cpa_trk_passes`` -> A["cpa_trk"] under the SAME gate + airborne rules (the track's U stands in for the
+target's altitude, the target TRUTH ground speed — or the track's own where truth is missing — for its speed).  Both
+pairs live in session state and are cleared together by data.seek() / data.reset_derived().  A connect-time HISTORY
+scan (feed.live_snapshot -> snap["cpa_hist"], see ``seed_cpa_from_history``) seeds the PASS LISTS of both pairs (every
+validated airborne pass of the LOOKBACK before the session connected, not just a minimum) — a late connect still shows
+the CPA of the last pass."""
 from __future__ import annotations
 
 import time
@@ -58,7 +82,11 @@ CPA_GATE_M_DEFAULT = 70.0   # sidebar "Closest-approach gate (m)" default
 CPA_RISE_M = 20.0           # local-minimum test: separation must rise by >= this ...
 CPA_RISE_FRAC = 0.15        # ... or by >= this fraction of the minimum ...
 CPA_LOOK_S = 10.0           # ... within this many seconds after the minimum
+AIRBORNE_MIN_M = 20.0       # AIRBORNE gate: both entities (truth U / track U) at least this far ABOVE the radar for a separation sample to be a CPA candidate
+AIRBORNE_TGT_SPEED_MPS = 2.0   # ... AND the target's ground speed at least this (a hover beside the parked interceptor is not a pass)
+PASS_LIST_MAX = 50          # validated passes kept per pair in session state (oldest dropped)
 SEP_MIN_SPAN_S = 60.0       # the separation series always spans at least this (pre-flight: a 1 s grid made every x tick label identical)
+TRACK_SEP_GAP_S = 2.0       # "sep · track" (interceptor truth <-> target TRACK) is NaN where the track has no published state within this of the grid time
 TRACK_FLASH_S = 10.0        # tile edge / map pill flash amber this long after a target- or interceptor-track handover
 SIG_KEYS = ("sig_az", "sig_el", "sig_rng", "sig_alt", "sig_pos3d", "sig_ve", "sig_vn", "sig_vu")
 VEL_KEYS = ("ve", "vn", "vu")            # velocity-state errors (spa e_dot / n_dot / u_dot: track − truth, m/s) with sigmas sig_ve / sig_vn / sig_vu
@@ -429,6 +457,259 @@ def cpa_gate(S: dict, cpa: tuple | None, gate_m: float = CPA_GATE_M_DEFAULT, *, 
         return False
     rise = float(np.max(sep[m])) - sep_min
     return bool(rise >= min(float(rise_m), float(rise_frac) * sep_min))
+
+
+def interp_track(a: np.ndarray | None, ts: np.ndarray, max_gap: float = TRACK_SEP_GAP_S) -> np.ndarray:
+    """(E,N,U) of a TK-layout track at ``ts`` (linear between published states); NaN where the NEAREST published
+    state is more than ``max_gap`` s away (the track had no state there) and everywhere for an empty track."""
+    ts = np.asarray(ts, float)
+    out = np.full((len(ts), 3), np.nan)
+    if a is None or not len(a) or not len(ts):
+        return out
+    a = np.asarray(a, float)
+    o = np.argsort(a[:, 0], kind="stable")
+    a = a[o]
+    t = a[:, 0]
+    for k in range(3):
+        out[:, k] = np.interp(ts, t, a[:, 1 + k])
+    idx = np.searchsorted(t, ts).clip(0, len(t) - 1)
+    near = np.minimum(np.abs(ts - t[idx]), np.abs(ts - t[np.maximum(idx - 1, 0)]))
+    out[near > float(max_gap)] = np.nan
+    return out
+
+
+def track_separation(a: np.ndarray | None, itc: np.ndarray, grid: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Interceptor truth (``itc`` = interp_truth rows on ``grid``) <-> target TRACK ``a`` (TK rows): (sep3d, horiz, trk)
+    on the grid, NaN where either side is missing."""
+    trk = interp_track(a, grid)
+    n = min(len(grid), len(itc)) if itc is not None else 0
+    d = np.full((len(grid), 3), np.nan)
+    if n:
+        d[:n] = np.asarray(itc, float)[:n, :3] - trk[:n]
+    return np.sqrt((d * d).sum(axis=1)), np.hypot(d[:, 0], d[:, 1]), trk
+
+
+def running_min(prev: tuple | None, t: np.ndarray, sep: np.ndarray, pos: np.ndarray, horiz: np.ndarray) -> tuple | None:
+    """The (sep, t, E, N, horiz) running minimum: ``prev`` unless the series holds a lower finite sample."""
+    sep = np.asarray(sep, float)
+    if not np.isfinite(sep).any():
+        return prev
+    i = int(np.nanargmin(sep))
+    cand = (float(sep[i]), float(t[i]), float(pos[i, 0]), float(pos[i, 1]), float(horiz[i]))
+    return cand if prev is None or cand[0] < prev[0] else prev
+
+
+def best_validated_pass(t: np.ndarray, sep: np.ndarray, pos: np.ndarray, horiz: np.ndarray, gate_m: float, mask: np.ndarray | None = None) -> tuple | None:
+    """The LOWEST separation sample that passes the CPA gate (below ``gate_m`` and a true local minimum by cpa_gate's
+    rise rule, evaluated on the WHOLE series) anywhere in a history series — None when no pass in the series qualifies.
+    ``mask`` (optional) restricts the CANDIDATE samples (e.g. the seconds a track was target-side) without hiding the
+    rise after them.  Used to seed the CPA pairs from the connect-time history scan (a hover on the pad or a
+    still-closing tail never seeds anything)."""
+    t, sep = np.asarray(t, float), np.asarray(sep, float)
+    if not len(t) or not np.isfinite(sep).any():
+        return None
+    S = {"t": t, "sep": sep}
+    cand_sep = sep if mask is None else np.where(np.asarray(mask, bool), sep, np.nan)
+    if not np.isfinite(cand_sep).any():
+        return None
+    order = np.argsort(cand_sep, kind="stable")
+    for i in order:
+        if not np.isfinite(cand_sep[i]) or cand_sep[i] >= float(gate_m):
+            break
+        cand = (float(sep[i]), float(t[i]), float(pos[i, 0]), float(pos[i, 1]), float(horiz[i]))
+        if cpa_gate(S, cand, gate_m):
+            return cand
+    return None
+
+
+def airborne_mask(tgt: np.ndarray, itc: np.ndarray, alt_a: np.ndarray | None = None, spd: np.ndarray | None = None,
+                  min_m: float = AIRBORNE_MIN_M, min_spd: float = AIRBORNE_TGT_SPEED_MPS) -> np.ndarray:
+    """Per-grid-sample AIRBORNE gate: ``tgt`` / ``itc`` = interp_truth rows (E,N,U,vE,vN,vU) of the target / interceptor truth
+    on the grid.  True where BOTH entities are >= ``min_m`` above the radar AND the target's ground speed is >= ``min_spd``.
+    ``alt_a`` replaces the target's altitude (the TRACK's U for the track pair); ``spd`` replaces the target speed where
+    finite (the track pair falls back to it where the target truth is missing).  NaN anywhere -> False."""
+    tgt, itc = np.asarray(tgt, float), np.asarray(itc, float)
+    n = min(len(tgt), len(itc))
+    out = np.zeros(max(len(tgt), len(itc)), bool)
+    if n == 0:
+        return out
+    alt_t = tgt[:n, 2] if alt_a is None else np.asarray(alt_a, float)[:n]
+    spd_t = np.hypot(tgt[:n, 3], tgt[:n, 4])
+    if spd is not None:
+        s2 = np.asarray(spd, float)[:n]
+        spd_t = np.where(np.isfinite(spd_t), spd_t, s2)
+    with np.errstate(invalid="ignore"):
+        ok = (alt_t >= float(min_m)) & (itc[:n, 2] >= float(min_m)) & (spd_t >= float(min_spd))
+    out[:n] = ok & np.isfinite(alt_t) & np.isfinite(itc[:n, 2]) & np.isfinite(spd_t)
+    return out
+
+
+def validated_passes(t: np.ndarray, sep: np.ndarray, pos: np.ndarray, horiz: np.ndarray, gate_m: float, mask: np.ndarray | None = None, *,
+                     rise_m: float = CPA_RISE_M, rise_frac: float = CPA_RISE_FRAC, look_s: float = CPA_LOOK_S) -> list[tuple]:
+    """EVERY validated pass of a separation series, oldest first: samples i with sep[i] < gate_m that are (a) a true local
+    minimum — strictly below every finite sample of the preceding look_s and not above any of the following look_s (a plateau
+    counts once, at its first sample), (b) preceded by at least one finite sample inside look_s (a minimum at the window's
+    first finite sample — a buffer refill edge — never qualifies), (c) followed by the cpa_gate rise (>= rise_m or rise_frac of
+    the minimum within look_s: the pass is over) and (d) allowed by ``mask`` (the airborne gate / the target-side seconds).
+    Returns [(sep, t, E, N, horiz)]."""
+    t, sep = np.asarray(t, float), np.asarray(sep, float)
+    n = len(t)
+    if n < 2 or not np.isfinite(sep).any():
+        return []
+    ok = np.isfinite(sep) & (sep < float(gate_m))
+    if mask is not None:
+        ok &= np.asarray(mask, bool)[:n]
+    if not ok.any():
+        return []
+    S = {"t": t, "sep": sep}
+    out = []
+    need = lambda v: min(float(rise_m), float(rise_frac) * float(v))   # noqa: E731  the rise that ends a pass at separation v
+
+    def _separate(i: int, j: int) -> bool:
+        """The lower sample j (within look_s of i) belongs to ANOTHER pass: the series rose by the full rise between them."""
+        lo_, hi_ = (i, j) if i < j else (j, i)
+        mid = sep[lo_ + 1:hi_]
+        mid = mid[np.isfinite(mid)]
+        return bool(len(mid)) and float(np.max(mid)) - float(sep[i]) >= need(sep[i])
+
+    for i in np.flatnonzero(ok):
+        ti, si = t[i], sep[i]
+        before = np.flatnonzero((t < ti) & (t >= ti - float(look_s)) & np.isfinite(sep))
+        after = np.flatnonzero((t > ti) & (t <= ti + float(look_s)) & np.isfinite(sep))
+        if not len(before) or not len(after):
+            continue
+        # a true local minimum: strictly below the preceding look_s (a plateau counts once) and not above the following look_s —
+        # unless the lower neighbour is a SEPARATE pass (the series fully rose in between: two passes < look_s apart both count)
+        if any(sep[j] <= si and not (sep[j] < si and _separate(i, j)) for j in before):
+            continue
+        if any(sep[j] < si and not _separate(i, j) for j in after):
+            continue
+        cand = (float(si), float(ti), float(pos[i, 0]), float(pos[i, 1]), float(horiz[i]))
+        if cpa_gate(S, cand, gate_m, rise_m=rise_m, rise_frac=rise_frac, look_s=look_s):
+            out.append(cand)
+    return out
+
+
+def merge_passes(prev: list | None, new: list, gate_m: float, tol_s: float = 1.5) -> list:
+    """The session pass list after a tick: ``prev`` (oldest first) with every pass now above the gate dropped, ``new`` passes
+    added (a pass within tol_s of a stored one REPLACES it: the same pass re-derived from a longer / shifted window), sorted
+    by time, capped at PASS_LIST_MAX (oldest dropped)."""
+    out = [tuple(p) for p in (prev or ()) if p is not None and float(p[0]) < float(gate_m)]
+    for c in new:
+        out = [p for p in out if abs(float(p[1]) - float(c[1])) > float(tol_s)]
+        out.append(tuple(c))
+    out.sort(key=lambda p: float(p[1]))
+    return out[-PASS_LIST_MAX:]
+
+
+def latest_pass(passes: list | None) -> tuple | None:
+    """The MOST RECENT validated pass (what the plots mark) or None."""
+    return tuple(passes[-1]) if passes else None
+
+
+def _is_pass(cand: tuple | None, passes: list | None, tol_s: float = 1.5) -> bool:
+    return cand is not None and any(abs(float(p[1]) - float(cand[1])) <= tol_s for p in (passes or ()))
+
+
+def _drop_stale_min(run: tuple | None, t_start: float, passes: list | None) -> tuple | None:
+    """A running minimum older than the separation series' start that never became a validated pass can never be gated
+    again (its samples are gone) — dropped so the window re-derives its own minimum.  A validated one is kept."""
+    if run is not None and float(run[1]) < float(t_start) and not _is_pass(run, passes):
+        return None
+    return run
+
+
+def _reset_pass_lists(s) -> None:
+    """data.seek() / reset_derived() clear ``cpa_run`` + ``cpa_ok`` (and the track pair) but know nothing of the pass lists:
+    both pair keys None while a pass list is non-empty = a reset happened since the last tick -> the lists go too."""
+    for run_k, ok_k, list_k in (("cpa_run", "cpa_ok", "cpa_passes"), ("cpa_trk_run", "cpa_trk_ok", "cpa_trk_passes")):
+        if s.get(run_k) is None and s.get(ok_k) is None and s.get(list_k):
+            s[list_k] = []
+
+
+def track_speed_on_grid(trk: np.ndarray) -> np.ndarray:
+    """Ground speed (m/s) of an interp_track (E,N,U) series on the 1 Hz grid by central differences — the target-speed
+    fallback of the track pair's airborne gate where the target truth is missing."""
+    trk = np.asarray(trk, float)
+    n = len(trk)
+    out = np.full(n, np.nan)
+    if n >= 3:
+        out[1:-1] = np.hypot(trk[2:, 0] - trk[:-2, 0], trk[2:, 1] - trk[:-2, 1]) / 2.0
+    return out
+
+
+def seed_cpa_from_history(s, snap: dict, gate_m: float) -> dict | None:
+    """Connect-time history: ``snap["cpa_hist"]`` = {"tgt", "itc" (TR rows), "tracks" {tid: TK rows}, "lo", "hi", "rev",
+    "complete"} for the LOOKBACK before the live buffer (feed.live_snapshot, chunked over several ticks).  Every time
+    its ``rev`` advances the truth-truth and truth-track separations over [lo, hi] are recomputed and the best validated
+    pass of each seeds ``cpa_run``/``cpa_ok`` and ``cpa_trk_run``/``cpa_trk_ok`` — only when lower than what the session
+    already holds (a live pass seen since connecting always wins).  Returns what was seeded (for A / tests) or None."""
+    H = snap.get("cpa_hist")
+    if not isinstance(H, dict) or H.get("rev") is None:
+        return None
+    rev = H.get("rev")
+    # a rev is re-read only when it is new, or when a seek / disconnect (data.seek / reset_derived) cleared both pairs after a rev
+    # that HAD seeded something (a rev that yielded nothing is marked and never re-read: the arrays did not change)
+    cleared = s.get("cpa_run") is None and s.get("cpa_trk_run") is None
+    if s.get("_cpa_hist_rev") == rev and (not cleared or s.get("_cpa_hist_none") == rev):
+        return None
+    if cleared:
+        _reset_pass_lists(s)
+    s["_cpa_hist_rev"] = rev
+    Tt, Ti = H.get("tgt"), H.get("itc")
+    lo, hi = float(H.get("lo", 0.0)), float(H.get("hi", 0.0))
+    if Ti is None or not len(Ti) or hi <= lo:
+        s["_cpa_hist_none"] = rev
+        return None
+    grid = np.arange(np.floor(lo), np.floor(hi) + 1.0)
+    itc = interp_truth(Ti, grid)
+    out = {"truth": None, "track": None, "lo": lo, "hi": hi}
+    if Tt is not None and len(Tt):
+        tgt = interp_truth(Tt, grid)
+        d = tgt[:, :3] - itc[:, :3]
+        sep = np.sqrt((d * d).sum(axis=1))
+        air = airborne_mask(tgt, itc)
+        passes = validated_passes(grid, sep, tgt, np.hypot(d[:, 0], d[:, 1]), gate_m, mask=air)
+        if passes:
+            s["cpa_passes"] = merge_passes(s.get("cpa_passes"), passes, gate_m)
+            s["cpa_ok"] = latest_pass(s["cpa_passes"])
+            best = min(passes, key=lambda p: p[0])
+            if s.get("cpa_run") is None or best[0] < s["cpa_run"][0]:
+                s["cpa_run"] = best
+            out["truth"] = best
+        # the track CPA: EVERY track's own interceptor-truth <-> track series (smooth, so the rise rule works).  A track is a
+        # TARGET-track candidate by ALLEGIANCE over its whole span in the history (median distance to the target truth inside
+        # D.GATE_M and not larger than to the interceptor truth — the engine's side_scores logic), never by the distance at one
+        # second: at a 28 m pass the target track is often momentarily nearer the interceptor.  The interceptor's own radar
+        # track (median ~10 m from the interceptor, hundreds from the target) is never a candidate.  Candidate seconds =
+        # the track inside the gate of the target truth; lowest validated pass wins.
+        best_t, passes_t = None, []
+        for a in (H.get("tracks") or {}).values():
+            trk = interp_track(a, grid)
+            dT = np.hypot(trk[:, 0] - tgt[:, 0], trk[:, 1] - tgt[:, 1])
+            dI = np.hypot(trk[:, 0] - itc[:, 0], trk[:, 1] - itc[:, 1])
+            fin = np.isfinite(dT) & np.isfinite(dI)
+            if not fin.any():
+                continue
+            mT, mI = float(np.median(dT[fin])), float(np.median(dI[fin]))
+            if not (mT < D.GATE_M and mT <= mI):
+                continue
+            dd = itc[:, :3] - trk
+            air_t = airborne_mask(tgt, itc, alt_a=trk[:, 2], spd=track_speed_on_grid(trk))
+            for cand in validated_passes(grid, np.sqrt((dd * dd).sum(axis=1)), trk, np.hypot(dd[:, 0], dd[:, 1]), gate_m,
+                                         mask=np.isfinite(dT) & (dT < D.GATE_M) & air_t):
+                passes_t.append(cand)
+                if best_t is None or cand[0] < best_t[0]:
+                    best_t = cand
+        if passes_t:
+            s["cpa_trk_passes"] = merge_passes(s.get("cpa_trk_passes"), passes_t, gate_m)
+            s["cpa_trk_ok"] = latest_pass(s["cpa_trk_passes"])
+            if s.get("cpa_trk_run") is None or best_t[0] < s["cpa_trk_run"][0]:
+                s["cpa_trk_run"] = best_t
+            out["track"] = best_t
+    if out["truth"] is None and out["track"] is None:
+        s["_cpa_hist_none"] = rev
+    return out
 
 
 # ── Coverage / false tracks / errors ─────────────────────────────────────────
@@ -1022,24 +1303,26 @@ def analyze(snap: dict, params: dict) -> dict:
     # engagement: separation since flight start, closest-so-far, prediction
     S = separation_series(snap["tgt_hist"], snap["itc_hist"], snap.get("t_start", t_now - 600), t_now)
     A["sep"] = S
-    cpa = s.get("cpa_run")
-    if np.isfinite(S["sep"]).any():
-        i = int(np.nanargmin(S["sep"]))
-        cand = (float(S["sep"][i]), float(S["t"][i]), float(S["tgt"][i, 0]), float(S["tgt"][i, 1]), float(S["horiz"][i]))
-        if cpa is None or cand[0] < cpa[0]:
-            cpa = cand
-    s["cpa_run"] = cpa
-    A["cpa_run"] = cpa                                   # running minimum, never gated (tile value)
     gate_m = float(params.get("cpa_gate_m", s.get("cpa_gate_m", CPA_GATE_M_DEFAULT)))
     A["cpa_gate_m"] = gate_m
-    ok = s.get("cpa_ok")
-    if cpa_gate(S, cpa, gate_m):
-        ok = cpa                                         # the running minimum passed the gate -> it is THE CPA
-    elif ok is not None and ok[0] >= gate_m:
-        ok = None                                        # gate tightened below a previously validated CPA
+    # connect-time history (live: the LOOKBACK before the buffer, fetched over a few ticks): seeds BOTH CPA pairs with
+    # the best validated pass found there before this tick's running minima are taken
+    _reset_pass_lists(s)                                 # data.seek()/reset_derived() cleared the pairs -> the pass lists go too
+    A["cpa_seeded"] = seed_cpa_from_history(s, snap, gate_m)
+    air = airborne_mask(S["tgt"], S["itc"])              # AIRBORNE gate per grid sample (both >= AIRBORNE_MIN_M up, target moving)
+    S["airborne"] = air
+    sep_air = np.where(air, S["sep"], np.nan)
+    passes = merge_passes(s.get("cpa_passes"), validated_passes(S["t"], S["sep"], S["tgt"], S["horiz"], gate_m, mask=air), gate_m)
+    s["cpa_passes"] = passes
+    A["cpa_passes"] = list(passes)                       # every validated airborne pass of the session, oldest first
+    cpa = _drop_stale_min(s.get("cpa_run"), float(S["t"][0]), passes)   # a never-validated minimum older than the series can never gate: dropped
+    cpa = running_min(cpa, S["t"], sep_air, S["tgt"], S["horiz"])
+    s["cpa_run"] = cpa
+    A["cpa_run"] = cpa                                   # session minimum, AIRBORNE-gated (the "closest so far" tile)
+    ok = latest_pass(passes)                             # the MOST RECENT validated pass is THE CPA the plots mark (None until one validates)
     s["cpa_ok"] = ok
-    A["cpa"] = ok                                        # what the plots mark (None until validated)
-    A["cpa_valid"] = ok is not None and cpa is not None and ok[1] == cpa[1]   # the running minimum IS the validated CPA
+    A["cpa"] = ok
+    A["cpa_valid"] = _is_pass(cpa, passes)               # the running minimum IS one of the validated passes (tile turns gold)
     # "separation now" = the newest FINITE 1 Hz grid point within the last 3 s (the last grid point
     # can sit a few hundred ms past the newest truth sample and interpolate to NaN)
     tail = S["sep"][-4:]
@@ -1067,6 +1350,25 @@ def analyze(snap: dict, params: dict) -> dict:
     A["unit"] = str(snap.get("unit") or D.UNIT)
     A["tgt_track"] = tracks.get(tid) if tid is not None else None
     A["itc_track"] = tracks.get(A["itc_tid"]) if A["itc_tid"] is not None else None
+    # "sep · track": interceptor truth <-> the TARGET TRACK's state (the track selected above, by id) on the separation
+    # grid + its own running minimum / gated CPA (cpa_trk_run / cpa_trk_ok -> A["cpa_trk"]) under the same gate rule
+    S["sep_trk"], S["horiz_trk"], S["trk"] = track_separation(A["tgt_track"], S["itc"], S["t"])
+    air_t = airborne_mask(S["tgt"], S["itc"], alt_a=S["trk"][:, 2], spd=track_speed_on_grid(S["trk"]))   # the track's U + the target's speed
+    S["airborne_trk"] = air_t
+    passes_t = merge_passes(s.get("cpa_trk_passes"), validated_passes(S["t"], S["sep_trk"], S["trk"], S["horiz_trk"], gate_m, mask=air_t), gate_m)
+    s["cpa_trk_passes"] = passes_t
+    A["cpa_trk_passes"] = list(passes_t)
+    cpa_t = _drop_stale_min(s.get("cpa_trk_run"), float(S["t"][0]), passes_t)
+    cpa_t = running_min(cpa_t, S["t"], np.where(air_t, S["sep_trk"], np.nan), S["trk"], S["horiz_trk"])
+    s["cpa_trk_run"] = cpa_t
+    A["cpa_trk_run"] = cpa_t
+    ok_t = latest_pass(passes_t)
+    s["cpa_trk_ok"] = ok_t
+    A["cpa_trk"] = ok_t                                  # the track CPA the plots mark: the most recent validated airborne pass (None until one)
+    A["cpa_trk_valid"] = _is_pass(cpa_t, passes_t)
+    tail_t = S["sep_trk"][-4:]
+    fin_t = np.flatnonzero(np.isfinite(tail_t))
+    A["sep_trk_now"] = float(tail_t[fin_t[-1]]) if len(fin_t) else None
     # chaos-spa graded errors over the rolling window (antenna LLA from the snapshot:
     # archive bundle constants or the live run's TRACKS-derived origin)
     A["ant"] = tuple(snap.get("ant") or (D.ANT_LAT, D.ANT_LON, D.ANT_HAE))

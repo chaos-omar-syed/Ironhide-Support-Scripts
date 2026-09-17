@@ -85,7 +85,7 @@ TIMEOUT = 180
 CHART_KEYS = ["live_map", "live_sep", "live_err", "live_vel", "live_meas"]  # fallback-path emission order (map left, sep + err right, velocity, meas below)
 FIG_KEYS = ("map", "sep", "err", "vel", "meas")
 HAVE0 = {k: "" for k in FIG_KEYS}
-SERIES = ("separation 3D", "horizontal", "closing rate", "interceptor truth", "target truth")
+SERIES = ("separation to truth", "separation to track", "closing rate", "interceptor truth", "target truth")   # 2026-09-17: sep card = truth + TRACK series (horizontal dropped)
 
 
 def _at(page: str, **state) -> AppTest:
@@ -418,7 +418,7 @@ def test_heads_and_head_images_in_figs_json_and_map_has_no_icon_images():
     tt = next(t for t in _figs(at)["map"]["data"] if t.get("name") == "target truth")           # live-segment anchor = the drawn trail's last point
     assert body["tails"]["tgt"] == [round(float(_arr(tt["x"])[-1]), 1), round(float(_arr(tt["y"])[-1]), 1)] and body["tails"]["itc"] is not None
     assert body["view"]["mode"] == "engage" and body["view"]["rev"] == 0 and body["ui"] == {"font_px": 13, "line_w": 2.5, "preset": "Laptop", "text_scale": 1.0}   # 2026-09-15: the default preset is Laptop (D.STATE_DEFAULTS["screen"])
-    assert [p["name"] for p in body["pills"]] == ["pill_tgt", "pill_itc"] and body["pills"][0]["text"] == "#177"   # map track-number pills ride the envelope
+    assert [p["name"] for p in body["pills"]] == ["pill_tgt"] and body["pills"][0]["text"] == "#177"   # map track-number pill rides the envelope (2026-09-17: no interceptor-track pill)
     assert isinstance(body["more"], list) and body["more"] and body["more"][0][0] == "Coverage · 60 s"
     # heads match the engine's truth heads
     A_t = heads["tgt"]
@@ -567,6 +567,8 @@ def test_live_figures_follow_mark_and_chrome_spec():
                 elif re.fullmatch(r"#\d+ · (target|interceptor)", name) and t.get("mode") == "lines" and t.get("x") not in ([None],):
                     assert t["line"]["width"] in (PL.ON_W, PL.DEPARTED_W) and t["line"]["color"] in PL.RAMP_TGT + PL.RAMP_ITC + (PL.RAMP_FOLD,)
                     assert t["line"]["dash"] in PL.STEP_DASH and t["opacity"] in (1.0, PL.COAST_ALPHA, PL.DEPARTED_ALPHA)
+            elif k == "map" and t.get("mode") == "lines" and name in ("interceptor truth", "target truth"):
+                assert t["line"]["width"] == max(PL.LINE_W, PL.TRAIL_W) == 3.5, (k, name)   # 2026-09-17 map contrast: truth trails 3.5 px over a 6 px halo
             elif t.get("mode") == "lines" and not t.get("fill") and (name in SERIES or name.startswith("track #")):
                 assert t["line"]["width"] == PL.LINE_W == LP["line_w"], (k, name)       # series lines 2.5 px (Laptop / Desktop presets)
         # text wears ink — except the map's track-number pills (team colour by design: "#177" red / "#203" blue) and the map's
@@ -594,7 +596,7 @@ def test_live_figures_follow_mark_and_chrome_spec():
     assert stat["text"] == "<b>#177 CONFIRMED</b>" and stat["xref"] == stat["yref"] == "paper" and (stat["x"], stat["y"]) == (1.0, 1.0)
     assert stat["font"]["color"] == T.GREEN and stat["xanchor"] == "right" and stat["yanchor"] == "bottom"
     pills = {a["name"]: a for a in figs["map"]["layout"]["annotations"] if a["name"].startswith("pill_")}
-    assert pills["pill_tgt"]["text"] == "#177" and pills["pill_tgt"]["font"] == {"family": T.MONO, "size": 13, "color": T.INK}          # D7: text in ink, colour on the border
+    assert pills["pill_tgt"]["text"] == "#177" and pills["pill_tgt"]["font"] == {"family": T.MONO, "size": PL.PILL_PX, "color": T.INK}   # D7: text in ink, colour on the border (2026-09-17: PILL_PX 15)
     assert pills["pill_tgt"]["bgcolor"] == T.CARD and pills["pill_tgt"]["bordercolor"] == T.TARGET and pills["pill_tgt"]["borderwidth"] == 2 and pills["pill_tgt"]["xshift"] == 14   # up-right of the newest track point
     trk = next(t for t in figs["map"]["data"] if t.get("name") == "target track #177")
     assert abs(pills["pill_tgt"]["x"] - float(_arr(trk["x"])[-1])) < 0.06 and abs(pills["pill_tgt"]["y"] - float(_arr(trk["y"])[-1])) < 0.06
@@ -775,15 +777,17 @@ def test_cpa_marked_on_map_sep_and_every_error_and_velocity_card():
     cpa = at.session_state["cpa_ok"]
     assert cpa is not None and cpa == at.session_state["cpa_run"]
     assert abs(cpa[0] - 59.0) < 0.6 and D.pdt_hms(cpa[1]) == "07:22:31", cpa
-    star = dict(symbol="star", size=14, color=T.GOLD)
+    star = dict(symbol="star", size=21, color=T.GOLD)   # 2026-09-17: x1.5
     for k in ("map", "sep"):
         s_ = [t for t in figs[k]["data"] if t.get("name") == "CPA"]
         assert len(s_) == 1 and all(s_[0]["marker"][kk] == v for kk, v in star.items()) and s_[0]["marker"]["line"] == {"width": 2, "color": T.CARD}
-        if k == "map":
-            assert s_[0]["textfont"]["color"] == T.INK and s_[0]["text"][0].strip() == "CPA 59 m"
+        if k == "map":   # 2026-09-17: the map label is an annotation on TAG_BG (>= 14 px x scale) beside the marker-only ★
+            assert "text" not in s_[0] and s_[0]["mode"] == "markers"
+            lab = [a for a in figs[k]["layout"].get("annotations", []) if a.get("name") == "cpa_map_label"]
+            assert len(lab) == 1 and lab[0]["text"] == "CPA 59 m" and lab[0]["font"]["color"] == T.INK and lab[0]["font"]["size"] >= 14 and lab[0]["bgcolor"] == PL.TAG_BG
         else:   # separation: the ★ stays, its words left the plot area (hover + the card header HUD "CPA 59 m · 07:22:31")
             assert "text" not in s_[0] and "CPA" in s_[0]["hovertemplate"] and "07:22:31" in s_[0]["hovertemplate"]
-            assert _store(at)["hud"] == {"cpa": "CPA 59 m · 07:22:31"}
+            assert _store(at)["hud"] == {"cpa": "CPA truth 59 m · 07:22:31 · CPA track 60 m · 07:22:30"}   # 2026-09-17: both CPAs (track = interceptor truth <-> #177)
             assert any((t.get("name") or "") == "_anchor_pad" for t in figs[k]["data"])                 # 2 % right padding anchor
         assert not any(t.get("name") == "closest so far" for t in figs[k]["data"])
     gold_sep = [sh for sh in figs["sep"]["layout"]["shapes"] if sh["line"]["color"] == T.GOLD]
@@ -842,9 +846,9 @@ def test_cpa_gate_f1_before_after_and_gate_width():
     at = _at(LIVE, flight=1, anchor_t=F1_PRE, playing=False).run()
     assert not _exc(at), _exc(at)
     run = at.session_state["cpa_run"]
-    assert at.session_state["cpa_ok"] is None and run is not None and run[0] > 100
+    assert at.session_state["cpa_ok"] is None and (run is None or run[0] > 100)   # 2026-09-17 airborne gate: no running minimum until both fly >= 20 m up
     stars, hair, hud, tile = state(at)
-    assert (stars, hair, hud) == (0, 0, "") and tile[0] == "na" and "closest so far (no CPA yet · gate 70 m)" in tile[3]
+    assert (stars, hair, hud) == (0, 0, "") and tile[0] == "na" and ("closest so far (no CPA yet · gate 70 m)" in tile[3] or "no pair yet" in tile[3])   # 2026-09-17 airborne gate: no running minimum before both fly
     # after pass 1: 78 m local minimum, rejected by the 70 m gate ...
     at = _at(LIVE, flight=1, anchor_t=F1_P1, playing=False).run()
     assert not _exc(at), _exc(at)
@@ -858,7 +862,7 @@ def test_cpa_gate_f1_before_after_and_gate_width():
     ok = at.session_state["cpa_ok"]
     assert ok is not None and abs(ok[0] - 78.4) < 0.6 and D.pdt_hms(ok[1]) == "07:21:43"
     stars, hair, hud, tile = state(at)
-    assert (stars, hair, hud) == (2, 1, "CPA 78 m · 07:21:43") and tile[0] == "gold" and "CPA 78 m" in tile[3]
+    assert (stars, hair, hud) == (2, 1, "CPA truth 78 m · CPA track — · 07:21:43") and tile[0] == "gold" and "CPA 78 m" in tile[3]   # 2026-09-17: no track CPA at pass 1 (#177 read 143 m)
     # the minimum of pass 2 itself: still closing -> not yet
     at = _at(LIVE, flight=1, anchor_t=F1_MID, playing=False).run()
     assert at.session_state["cpa_ok"] is None and state(at)[:3] == (0, 0, "")
@@ -866,7 +870,7 @@ def test_cpa_gate_f1_before_after_and_gate_width():
     at = _at(LIVE, flight=1, anchor_t=F1_AFTER, playing=False).run()
     ok = at.session_state["cpa_ok"]
     assert ok is not None and abs(ok[0] - 59.0) < 0.6 and D.pdt_hms(ok[1]) == "07:22:31" and at.session_state["cpa_run"] == ok
-    assert state(at)[:3] == (2, 1, "CPA 59 m · 07:22:31")
+    assert state(at)[:3] == (2, 1, "CPA truth 59 m · 07:22:31 · CPA track 60 m · 07:22:30")   # 2026-09-17: the track CPA rides the HUD with its own second
     # engine unit: the gate itself on a synthetic separation series
     S = {"t": np.arange(0.0, 20.0), "sep": np.array([300, 250, 200, 150, 100, 60, 65, 80, 120, 170, 230, 300, 300, 300, 300, 300, 300, 300, 300, 300.0])}
     cpa = (60.0, 5.0, 0.0, 0.0, 50.0)
@@ -885,18 +889,17 @@ def test_map_shows_trails_track_line_cpa_only():
     assert not _exc(at), _exc(at)
     data = _figs(at)["map"]["data"]
     names = {t.get("name") for t in data if t.get("showlegend", True) and t.get("name")}
-    itc = {n for n in names if n.startswith("interceptor track #")}
     expect = {"interceptor truth", "target truth", "target track #177", "CPA"}
     if PL.blind_rings():            # rings only when the modes library resolves DEFAULT_MODES (not in every checkout)
         expect.add("blind zone (c·pw/2)")
-    assert names - itc == expect, names
-    if itc:   # interceptor radar track: team blue, dashed, 2 px, faded — map only
-        it = next(t for t in data if (t.get("name") or "").startswith("interceptor track #"))
-        assert it["type"] == "scattergl" and it["line"] == {"color": T.INTERCEPTOR, "width": PL.ITC_TRACK_W, "dash": "dash"} and it["opacity"] == PL.ITC_TRACK_ALPHA
+    assert names == expect, names
+    assert not any((t.get("name") or "").startswith("interceptor track #") for t in data)   # 2026-09-17 hard rule: the interceptor's radar track is never drawn
     for bad in ("measurement", "coasting", "tentative", "other tracks"):
         assert not any(bad in (t.get("name") or "") for t in data), bad
     trk = next(t for t in data if t.get("name") == "target track #177")
-    assert trk["type"] == "scattergl" and trk["mode"] == "lines" and trk["line"] == {"color": T.TARGET, "width": PL.LINE_W, "dash": "dash"}
+    assert trk["type"] == "scattergl" and trk["mode"] == "lines" and trk["line"] == {"color": T.TARGET, "width": max(PL.LINE_W, PL.TRACK_W), "dash": "dash"}   # 2026-09-17: 3 px over a halo
+    halos = [t for t in data if (t.get("name") or "").startswith("_halo ")]
+    assert {t["name"] for t in halos} == {"_halo interceptor truth", "_halo target truth", "_halo target track #177"} and all(t["showlegend"] is False and t["line"] == {"color": PL.HALO, "width": PL.HALO_W} for t in halos)
     assert not any("markers" in (t.get("mode") or "") and (t.get("marker") or {}).get("symbol") in ("triangle-up",) for t in data)
     assert not any(t.get("hovertemplate", "").startswith(("target truth<br>", "interceptor truth<br>")) for t in data)   # no invisible head hover traces
 
@@ -1207,7 +1210,7 @@ def test_screen_presets_drive_iframe_height_figure_heights_fonts_and_line_width(
         for k in FIG_KEYS:
             assert figs[k]["layout"]["font"]["size"] == font and figs[k]["layout"]["xaxis"]["tickfont"]["size"] == font and figs[k]["layout"]["legend"]["font"]["size"] == font
         tt = next(t for t in figs["map"]["data"] if t.get("name") == "target truth")
-        assert tt["line"]["width"] == lw
+        assert tt["line"]["width"] == max(lw, PL.TRAIL_W)   # 2026-09-17 map contrast: truth trails >= 3.5 px
         assert _store(at)["ui"] == {"font_px": font, "line_w": lw, "preset": preset, "text_scale": 1.0}
         html = _panel(at)
         assert f"PANEL={panel}" in html and f"UI={{font_px:{font},line_w:{lw}" in html
@@ -1333,14 +1336,14 @@ def test_measurement_space_quad_truth_tracks_obs():
     assert {a["text"] for a in pills} >= {"#129", "#177"} and 4 <= len(pills) < 16                            # 2026-09-14: pills on the FIRST panel only ("not on EVERY plot")
     assert all(a["name"].endswith("_rng") and a["xref"] == "x" and a["yref"] == "y" for a in pills), [a["name"] for a in pills]
     for a in pills:   # 13 px mono primary ink on a rounded dark pill, right of the marker, above (★) / below (✕) the line
-        assert a["font"] == {"family": T.MONO, "size": 13, "color": T.INK} and a["bgcolor"] == T.CARD and a["bordercolor"] == T.RULE and a["borderpad"] == 2
+        assert a["font"] == {"family": T.MONO, "size": PL.PILL_PX, "color": T.INK} and a["bgcolor"] == T.CARD and a["bordercolor"] == T.RULE and a["borderpad"] == 2   # 2026-09-17: PILL_PX 15
         assert a["xanchor"] in ("left", "right") and abs(a["xshift"]) == 10 and a["yanchor"] in ("bottom", "top")   # a start label near the panel top flips BELOW its star (never into the title)
         assert (a["yshift"] > 0) == (a["yanchor"] == "bottom")
     c129 = next(t for t in data if t.get("name") == "#129 · target" and t.get("mode") == "lines" and t["line"]["color"] in PL.TRACK_SLOTS)["line"]["color"]
     c177 = next(t for t in data if t.get("name") == "#177 · target" and t.get("mode") == "lines" and t["line"]["color"] in PL.TRACK_SLOTS)["line"]["color"]
     assert c129 == PL.TRACK_SLOTS[0] and c177 == PL.TRACK_SLOTS[1] and T.INTERCEPTOR not in PL.TRACK_SLOTS       # first appearance -> slot; blue reserved
-    itc = [t for t in data if re.fullmatch(r"#\d+ · interceptor", t.get("name") or "") and t.get("mode") == "lines" and t.get("x") != [None]]
-    assert itc and all(t["line"]["color"] in PL.RAMP_ITC + (PL.RAMP_FOLD,) and t["line"]["dash"] in PL.STEP_DASH for t in itc)   # the interceptor's track: blue ramp
+    itc = [t for t in data if re.fullmatch(r"#\d+ · interceptor", t.get("name") or "")]
+    assert not itc                                                                                            # 2026-09-17 hard rule: the interceptor's radar track is never drawn (quad included)
     # COLOUR = ROLE: every track line is drawn from the red ramp (target-side), the blue ramp (interceptor-side) or the fold grey — nothing else
     allowed = set(PL.RAMP_TGT) | set(PL.RAMP_ITC) | {PL.RAMP_FOLD, T.GREY_TRACK}
     trk_lines = [t for t in data if re.fullmatch(r"#\d+ · (target|interceptor|no truth)", t.get("name") or "") and t.get("mode") == "lines"]
@@ -1348,7 +1351,7 @@ def test_measurement_space_quad_truth_tracks_obs():
     assert PL.RAMP_TGT == ("#f3a6a6", T.TARGET, T.TARGET_DARK) and PL.RAMP_ITC == ("#8fb8f0", T.INTERCEPTOR, "#2a6cc7") and PL.RAMP_FOLD == "#8a8a8a"
     steps = {t["name"]: (t["line"]["color"], t["line"]["dash"]) for t in trk_lines if t["line"]["width"] == PL.ON_W and t["line"]["color"] in PL.RAMP_TGT}
     assert steps["#129 · target"] == (PL.RAMP_TGT[0], "solid") and steps["#177 · target"] == (PL.RAMP_TGT[1], "dash")   # identity = lightness step + dash (+ the pill)
-    map_trk = [t for t in _figs(at)["map"]["data"] if "track #" in (t.get("name") or "")]
+    map_trk = [t for t in _figs(at)["map"]["data"] if "track #" in (t.get("name") or "") and not (t.get("name") or "").startswith("_halo")]   # 2026-09-17: the dark halo under the track is not a series
     assert map_trk and all(t["line"]["color"] in set(PL.RAMP_TGT) | set(PL.RAMP_ITC) for t in map_trk)
     assert "amb_dop" in LS.HEADERS["meas"][1] and "2×mono" in LS.HEADERS["meas"][1]
     geom = next(a for a in L["annotations"] if a.get("name") == "geom_note")
@@ -1391,7 +1394,7 @@ def test_meas_quad_gating_envelope_off_scale_and_steal():
     assert len(dep) == 4 and all(a["text"] == "→ interceptor (stolen)" and a["font"]["color"] == T.INK3 for a in dep)
     thin = [t for t in data if t.get("name") == "#177 · target" and t.get("mode") == "lines" and t["line"]["width"] == PL.DEPARTED_W]
     itc_side = [t for t in data if t.get("name") == "#177 · target" and t.get("mode") == "lines" and t["line"]["color"] in PL.RAMP_ITC]
-    assert itc_side and all(t["line"]["width"] == PL.ON_W and t["opacity"] in (1.0, PL.COAST_ALPHA) for t in itc_side) and all(t["opacity"] == PL.DEPARTED_ALPHA for t in thin)
+    assert not itc_side and thin and all(t["opacity"] == PL.DEPARTED_ALPHA for t in thin)   # 2026-09-17 hard rule: the stolen span is drawn departed-thin, never as the interceptor's (blue) track
     # y-ranges = TRUTH envelope (both truths) ± 15 %, floors ± 0.6 km / ± 20 m/s / ± 2°; the tracks never widen them
     for key, ax in (("rng", "yaxis"), ("rr", "yaxis2"), ("az", "yaxis3"), ("el", "yaxis4")):
         want = PL.truth_envelope([M["truth"], M["truth_itc"]], key)
@@ -1544,7 +1547,7 @@ def test_text_size_scales_fonts_everywhere():
     reads = [a for a in figs["err"]["layout"]["annotations"] if (a.get("name") or "").startswith("readout_")]
     assert all(a["font"]["size"] == round(PL.READOUT_PX * 1.3) for a in reads)
     pill = next(a for a in figs["map"]["layout"]["annotations"] if a["name"] == "pill_tgt")
-    assert pill["font"]["size"] == round(13 * 1.3)
+    assert pill["font"]["size"] == round(PL.PILL_PX * 1.3)   # 2026-09-17: PILL_PX 15
     assert "--ih-scale:1.3" in _panel(at) or "text_scale:1.3" in _panel(at)
     assert T.text_scale({"screen": "Large 1440p"}) == 1.3 and T.text_scale({"screen": "Desktop 1080p"}) == 1.15 and T.text_scale({"screen": "Laptop"}) == 1.0 and T.text_scale({"text_scale": "Large"}) == 1.15
     at2 = _at(LIVE, flight=1, anchor_t=F1_MID, playing=False, screen="Large 1440p", text_scale="X-Large").run()   # the preset default
@@ -1640,3 +1643,123 @@ def test_laptop_engagement_frame_closes_in_on_the_pass():
     assert span <= 800.0, (span, v_lap)                                    # they are together now: 400 m half-width cap
     assert span < v_desk["x1"] - v_desk["x0"], (v_lap, v_desk)             # ... and strictly tighter than Desktop's
     assert v_lap["y1"] - v_lap["y0"] == span and all(x % 100 == 0 for x in (v_lap["x0"], v_lap["x1"], v_lap["y0"], v_lap["y1"]))
+
+
+# ── LIVE session: the CPA of a pass must reach the page (2026-09-17 regression) ───────────────────
+# MRU91 run 3212ae2284eb44c7b3e8757e68d0d8cd (Salmon_Woodpecker): the 06:55:47 PDT pass (28.4 m truth
+# separation, 19 samples under the 70 m gate, then opening) produced NO gold ★ and no "CPA … m" in the
+# separation card header, although engine.analyze validates that pass from a fresh session.  Causes found:
+#   1. engine.running_min keeps cpa_run for the whole SESSION while engine.cpa_gate can only validate a
+#      minimum that still has samples in the buffered window -> an earlier, closer approach (that run:
+#      23.4 m @ 06:50:56, the pad/launch pass) masks every later pass AND, once its time scrolls out of the
+#      window, can never be gated: the page shows no CPA again for the rest of the run.  views/1_live.py
+#      (2026-09-17 later: the guard moved INTO ih.engine.analyze — a never-validated running minimum older than the
+#      separation series is dropped there; the CPA is now the most recent validated AIRBORNE pass, see ih/engine.py).
+#   2. data.set_roles dropped the raw live buffer, so assigning roles mid-engagement (that run: the TARGET
+#      feed mav14550_1_1 only appeared at 06:50:37) restarted the separation series at the click and lost the
+#      CPA of a pass that had just happened.  The buffer is keyed per MAVLink id and re-merged by role every
+#      tick, so it is kept now.
+#   3. views/3_data_source.py _follow is idempotent: re-selecting the run already followed no longer wipes the
+#      buffer + derived state.
+# Driven through the real Streamlit live path (ih.feed -> engine -> views/1_live.py -> liveserver.STORE) with
+# tests/fake_mongo.py streaming the 8/28 archive as mongo documents: pass 2 = 59 m @ 07:22:31.
+def _fake_live_at(FM, srv, **state):
+    """The Live page in LIVE mode against the installed fake, with the analysis clock driven by ``live_lag``."""
+    st8 = {"source": "live", "live_host": "fake", "live_port": 27017, "live_db": "sensor_store", "live_run": FM.RUN_COLL,
+           "hist_s": 180, "spec_window": 120, "cpa_gate_m": 70.0, "refresh_s": 2.0, "meas_open": False, **state}
+    return _at(LIVE, **st8)
+
+
+def test_live_cpa_of_a_pass_reaches_the_page_even_after_a_stale_minimum_or_a_role_change():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import fake_mongo as FM
+
+    from ih import feed as F
+
+    t0f, t1f = D.FLIGHT_WINDOWS[1][0] - 60, D.FLIGHT_WINDOWS[1][1] + 30
+    srv = FM.FakeMongo(t0f, t1f, shift_to_now=t1f + 5.0, with_obs=False)   # every document in the past: the clock is ours
+    restore, stale, inline = srv.install(), F.LIVE_STALE_S, os.environ.get("IH_FETCH_INLINE")
+    F.LIVE_STALE_S = 1e9                    # never anchor the clock to "newest data": this test IS the clock
+    os.environ["IH_FETCH_INLINE"] = "1"     # no browser -> the main script run does the fetching
+    SH = srv.shift                          # archive time -> the fake's document time
+    try:
+        at = _fake_live_at(FM, srv)
+
+        def tick(t_arch: float) -> None:
+            at.session_state["live_lag"] = time.time() - (float(t_arch) + SH)
+            at.run()
+            assert not _exc(at), (D.pdt_hms(t_arch), _exc(at))
+
+        def cpa():
+            return at.session_state["cpa_ok"]
+
+        # (a) FRESH live session across pass 2: no CPA while still closing, validated once it opens, and the
+        #     separation card's header HUD carries the words on the very tick it validates.
+        for t_arch in np.arange(F1_MID - 40, F1_MID + 1, 4.0):
+            tick(float(t_arch))
+            assert cpa() is None, (D.pdt_hms(t_arch), cpa())          # pass 1 is 78 m (over the gate), pass 2 still closing
+        assert at.session_state["last_snap"]["ok"] and len(at.session_state["last_snap"]["tgt_hist"]) > 100
+        for t_arch in np.arange(F1_MID + 4, F1_MID + 21, 4.0):
+            tick(float(t_arch))
+        ok = cpa()
+        assert ok is not None and abs(ok[0] - 59.0) < 2.0 and abs(ok[1] - (F1_MID + SH)) <= 2.0, ok
+        assert ok == at.session_state["cpa_run"]
+        hud = str((_store(at).get("hud") or {}).get("cpa") or "")
+        assert "CPA" in hud and f"{ok[0]:.0f} m" in hud, (hud, ok)      # PL.cpa_hud pushed with this tick's envelope
+        assert any(t.get("name") == "CPA" for t in _figs(at)["sep"]["data"]), "gold ★ missing from the separation card"
+        assert any(t.get("name") == "CPA" for t in _figs(at)["map"]["data"]), "gold ★ missing from the map"
+
+        # (b) THE 9-17 FAILURE: a never-validated running minimum from an earlier, closer approach whose time has
+        #     scrolled out of the window (there: 23.4 m @ 06:50:56 under a 20 m gate).  It must not be able to
+        #     mask the pass — engine.analyze drops it, the window re-derives its own minimum and the pass stays.
+        old = (5.0, F1_MID + SH - 600.0, 0.0, 0.0, 5.0)
+        for k in ("cpa_ok", "cpa_trk_ok", "tgt_tid", "last_snap"):
+            at.session_state[k] = None
+        at.session_state["cpa_run"], at.session_state["cpa_trk_run"] = old, old
+        tick(F1_MID + 12)
+        assert at.session_state["cpa_run"] != old, "a stale, un-gateable running minimum was kept"
+        ok = cpa()
+        assert ok is not None and abs(ok[0] - 59.0) < 2.0, (ok, at.session_state["cpa_run"])
+        # a minimum still inside the window is NEVER expired (only the un-gateable ones are)
+        keep = (5.0, F1_MID + SH - 30.0, 0.0, 0.0, 5.0)
+        at.session_state["cpa_run"], at.session_state["cpa_ok"] = keep, None
+        tick(F1_MID + 16)
+        assert at.session_state["cpa_run"] == keep, at.session_state["cpa_run"]
+
+        # (c) a ROLE CHANGE mid-engagement (ih.data.set_roles) clears the derived state but KEEPS the raw buffer,
+        #     so the next tick re-merges the whole window and the pass that just happened validates again.
+        body = open(f"{ROOT}/ih/data.py").read().split("def set_roles(")[1].split("\ndef ")[0]
+        assert 'pop("_live_buf"' not in body and 'pop("live_ant"' not in body, "set_roles drops the live buffer again"
+        buf = at.session_state["_live_buf"]
+        for k in ("cpa_run", "cpa_ok", "cpa_trk_run", "cpa_trk_ok", "tgt_tid", "last_snap"):
+            at.session_state[k] = None
+        at.session_state["track_events"] = []
+        tick(F1_MID + 20)
+        assert at.session_state["_live_buf"] is buf                     # same rows, nothing re-fetched from scratch
+        ok = cpa()
+        assert ok is not None and abs(ok[0] - 59.0) < 2.0, ok           # ... and the CPA is back on the very next tick
+
+        # (n.b. dropping the buffer is not free even though this fake refills 180 s in one tick: a fresh buffer is
+        #  bounded to [t_now - max(hist_s, spec_window), t_now] and on MRU91 fills back feed.CHUNK_S = 12 s per tick,
+        #  so a drop later than that window after a pass loses that pass for the rest of the session.)
+
+        # (e) re-selecting the run ALREADY followed (a stray selectbox on_change / a second Connect) must not wipe
+        #     the buffer or the CPA: views/3_data_source.py _follow is idempotent.
+        probe = {"ok": True, "err": None, "ts": time.time(), "n_total": 1, "limit": 25, "latency_ms": 1,
+                 "runs": [{"name": FM.RUN_COLL, "friendly": "Red_Mandrill", "start_t": t0f, "last_t": t1f, "n143": 900, "n106": 900}]}
+        keep_ok = (59.0, F1_MID + SH, 0.0, 0.0, 59.0)
+        ds = _at(SRC, ds_mode="live", source="live", live_host="fake", live_port=27017, live_db="sensor_store",
+                 live_run=FM.RUN_COLL, live_probe=probe, mru_number=91, cpa_ok=keep_ok, cpa_run=keep_ok,
+                 _live_buf={"run": FM.RUN_COLL, "sentinel": True}).run()
+        assert not _exc(ds), _exc(ds)
+        ds.selectbox(key="_run_w").select(FM.RUN_COLL).run()
+        assert not _exc(ds), _exc(ds)
+        assert (ds.session_state["_live_buf"] or {}).get("sentinel") is True, "re-following the same run dropped the buffer"
+        assert ds.session_state["cpa_ok"] == keep_ok and ds.session_state["live_run"] == FM.RUN_COLL
+    finally:
+        F.LIVE_STALE_S = stale
+        if inline is None:
+            os.environ.pop("IH_FETCH_INLINE", None)
+        else:
+            os.environ["IH_FETCH_INLINE"] = inline
+        restore()

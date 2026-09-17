@@ -174,7 +174,7 @@ def test_cpa_marked_on_every_error_and_velocity_card():
     "tick_labels"), never over the data.  PL.cpa_hud still feeds the separation card's header HUD."""
     t_cpa = T_NOW - 50.0
     A_e, A_v = _A_err(cpa_t=t_cpa), _A_vel(cpa_t=t_cpa)
-    assert PL.cpa_hud(A_e) == PL.cpa_hud(A_v) == f"CPA 59 m · {D.pdt_hms(t_cpa)}"
+    assert PL.cpa_hud(A_e) == PL.cpa_hud(A_v) == f"CPA truth 59 m · CPA track — · {D.pdt_hms(t_cpa)}"   # 2026-09-17: two CPAs in the HUD (no track CPA in these fixtures)
     for fig, rows in ((PL.error_fig(A_e, P_ERR, WIN), 4), (PL.velocity_fig(A_v, P_VEL, WIN, truth=_truth()), 3)):
         L = _L(fig)
         gold = [s for s in L["shapes"] if str(s.get("name") or "").startswith("cpa_line_")]
@@ -192,9 +192,19 @@ def test_cpa_marked_on_every_error_and_velocity_card():
     # a CPA at the right edge is still inside the window -> still marked ...
     fig = PL.error_fig(_A_err(cpa_t=T_NOW - 5.0), P_ERR, WIN)
     assert len([s for s in _L(fig)["shapes"] if str(s.get("name") or "").startswith("cpa_line_")]) == 4
-    # ... one OUTSIDE the window is not marked at all (cpa_marks' t_lo <= t <= t_now gate)
-    out = PL.error_fig(_A_err(cpa_t=T_NOW - WIN - 30.0), P_ERR, WIN)
-    assert not [s for s in _L(out)["shapes"] if str(s.get("name") or "").startswith("cpa_line_")] and not _ann(out, "tick_labels")
+    # ... one that has scrolled OUT of the window (2026-09-17 user: "the hairline must stay for the rest of the session") is PINNED at
+    # the window's LEFT edge on every card, its words suffixed "◂" and still carrying the real CPA time
+    t_out = T_NOW - WIN - 30.0
+    out = PL.error_fig(_A_err(cpa_t=t_out), P_ERR, WIN)
+    gold = [s for s in _L(out)["shapes"] if str(s.get("name") or "").startswith("cpa_line_")]
+    assert len(gold) == 4 and all(_ts(s["x0"]) == _ts(s["x1"]) == _ts(PL._dt(T_NOW - WIN)) for s in gold)
+    (lst,) = _ann(out, "tick_labels")
+    assert lst["text"] == f"CPA 59 m · {D.pdt_hms(t_out)} ◂"
+    outv = PL.velocity_fig(_A_vel(cpa_t=t_out), P_VEL, WIN, truth=_truth())
+    assert [s["name"] for s in sorted(_vlines(outv), key=lambda s: s["name"])] == [f"cpa_line_{r}" for r in (1, 2, 3)]
+    # a CPA in the FUTURE of the card (a paused replay seeked back) is not drawn
+    fut = PL.error_fig(_A_err(cpa_t=T_NOW + 5.0), P_ERR, WIN)
+    assert not [s for s in _L(fut)["shapes"] if str(s.get("name") or "").startswith("cpa_line_")]
 
 
 def test_handover_ticks_first_card_only_with_strip_list():
@@ -362,13 +372,23 @@ def test_bare_mode_07_23_52_labels_widths_ranges():
         pytest.skip("engine did not validate a CPA at this moment (archive differs)")
     fe = PL.error_fig(A, {**P, "err_height": 547, "font_px": 14, "line_w": 2.5}, 120.0)
     fv = PL.velocity_fig(A, {**P, "vel_height": 400, "font_px": 14, "line_w": 2.5}, 120.0, truth=snap["tgt"])
-    assert PL.cpa_hud(A) == f"CPA {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])}"                    # the same words also feed the separation header HUD
+    # 2026-09-17: the HUD names both CPAs — truth 53 m @ 07:23:47 and the track CPA (interceptor truth <-> target track #177) 36 m @ 07:23:48
+    assert PL.cpa_hud(A).startswith(f"CPA truth {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])} · CPA track ")
+    assert A["cpa_trk"] is not None and abs(A["cpa_trk"][0] - 36.3) < 0.6 and D.pdt_hms(A["cpa_trk"][1]) == "07:23:48"
+    assert PL.cpa_hud(A) == f"CPA truth {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])} · CPA track {A['cpa_trk'][0]:.0f} m · {D.pdt_hms(A['cpa_trk'][1])}"
+    fs = PL.separation_fig(A, {**P, "sep_height": 240})
+    names = [t.name for t in fs.data]
+    assert names[:2] == ["separation to truth", "separation to track"] and "CPA" in names and "CPA track" in names and "horizontal" not in names
+    trk_star = next(t for t in fs.data if t.name == "CPA track")
+    assert trk_star.marker.symbol == "star" and trk_star.marker.line.color == T.TARGET and trk_star.marker.color == T.CARD   # target-red ring
+    assert next(t for t in fs.data if t.name == "separation to track").line.dash == "dash"
+    assert len([s for s in _L(fs)["shapes"] if (s.get("line") or {}).get("color") == T.GOLD]) == 1                # one gold hairline (truth); none for the track CPA
     in_win = (A["t_now"] - 120.0) <= float(A["cpa"][1]) <= A["t_now"]
     for fig, rows in ((fe, 4), (fv, 3)):
         L = _L(fig)
         assert not any((s.get("line") or {}).get("color") == T.RED for s in L["shapes"])              # the red "now" line is still gone
         gold = [s for s in L["shapes"] if str(s.get("name") or "").startswith("cpa_line_")]
-        assert len(gold) == (rows if in_win else 0)                                                   # 2026-09-15: the gold CPA hairline is on EVERY card
+        assert len(gold) == rows                                                                      # 2026-09-15: the gold CPA hairline is on EVERY card (2026-09-17: pinned left once scrolled out)
         assert all((s.get("line") or {}).get("color") == T.GOLD for s in gold)
         assert not _ann(fig, "cpa_label") and not _ann(fig, r"handover_label_.*") and not _ann(fig, r"handover_tag_.*")
         for a in L["annotations"]:
@@ -378,10 +398,10 @@ def test_bare_mode_07_23_52_labels_widths_ranges():
     cpa_lines = [s for s in _L(fe)["shapes"] if str(s.get("name") or "").startswith("cpa_line_")]
     assert sorted(_vlines(fe), key=lambda s: s["name"]) == sorted(ticks + cpa_lines, key=lambda s: s["name"])   # handover ticks + CPA hairlines, nothing else
     (lst,) = _ann(fe, "tick_labels")                                                                   # one chronological list: handovers and/or the CPA
-    entry = r"(?:→ #\d+|CPA \d+ m) · \d\d:\d\d:\d\d"
+    entry = r"(?:→ #\d+|CPA \d+ m) · \d\d:\d\d:\d\d(?: ◂)?"
     assert re.fullmatch(rf"{entry}(   {entry}){{0,2}}", lst["text"]) and lst["xref"] == "x domain" and lst["yanchor"] == "bottom"
-    assert f"CPA {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])}" in lst["text"] or not in_win           # the CPA words ride in that list
-    assert [s["name"] for s in sorted(_vlines(fv), key=lambda s: s["name"])] == ([f"cpa_line_{r}" for r in (1, 2, 3)] if in_win else [])
+    assert f"CPA {A['cpa'][0]:.0f} m · {D.pdt_hms(A['cpa'][1])}" in lst["text"]                         # the CPA words ride in that list ("◂" appended once scrolled out)
+    assert [s["name"] for s in sorted(_vlines(fv), key=lambda s: s["name"])] == [f"cpa_line_{r}" for r in (1, 2, 3)]
     assert not _ann(fv, "tick_labels")                                                                  # velocity: the CPA hairline, no label list
     Le = _L(fe)
     assert -5.0 <= Le["yaxis"]["range"][0] and Le["yaxis"]["range"][1] <= 5.0 and Le["yaxis2"]["range"][1] <= 5.0

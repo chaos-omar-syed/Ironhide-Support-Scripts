@@ -291,11 +291,13 @@ def layout(preset: str | None = None, text_scale: float | None = None) -> dict:
 LAYOUT = layout(DEFAULT_PRESET, 1.0)   # the default preset's numbers at text scale 1 (Desktop 1080p: panel 860, map 582, sep 252, err 536, vel 206)
 FIG_KEYS = ("map", "sep", "err", "vel", "meas")
 PANEL_KEYS = ("map", "sep", "err", "vel")    # inside the one-screen iframe; "meas" has its own iframe below
+SAT_OPACITY = 0.85   # satellite underlay opacity (= ih.plots.SAT_OPACITY; 2026-09-17: 0.9 -> 0.85 under the brighter series)
+
 HEADERS = {  # constant card headers baked into the panel HTML (left text, right caption)
     # captions are hidden WHOLE by the panel JS (fitCaptions) when a column is too narrow for them, so they are kept short enough
     # for the two-column widths (>= 1600 px); the header's title attribute always carries the full text
     "map": ("Top-down · ENU about the radar", "solid = truth · dashed = radar tracks · thin = 5 s leader · ★ CPA (gated)"),
-    "sep": ("Separation · 3D & horizontal (m)", ""),   # right side carries the live status
+    "sep": ("Separation · truth & track (m)", ""),   # right side carries the live status
     "err": ("Track quality", "±1σ band · 3D pos = 1σ radius · lighter segments + bottom strip = coasting/tentative (not in stats) · gaps > 3 s = dropout"),
     "vel": ("Velocity states · filtered track vs truth (m/s)",
             "red = MAVLink truth · ink = track filtered state · lighter = coasting/tentative · Δ/σ/containment vs truth · ±1σ band live only"),
@@ -453,7 +455,7 @@ def _sat_worker(key: tuple, fn) -> None:
         imgs = []
         if r and r.get("img"):
             imgs = [dict(source=r["img"], xref="x", yref="y", x=r["x0"], y=r["y1"], sizex=r["x1"] - r["x0"], sizey=r["y1"] - r["y0"],
-                         xanchor="left", yanchor="top", sizing="stretch", layer="below", opacity=0.9, name="sat")]
+                         xanchor="left", yanchor="top", sizing="stretch", layer="below", opacity=SAT_OPACITY, name="sat")]
             _externalize_images({"layout": {"images": imgs}})
     except Exception as ex:  # offline etc.: an empty tile list, never a crash
         log.warning("satellite fetch failed for %s: %s", key, ex)
@@ -774,8 +776,8 @@ html.one,html.one body{{overflow-y:auto;overflow-x:hidden;}}
 #tw{{color:{T.INK3};}}
 .ov{{position:absolute;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;z-index:2;}}   /* the DOM overlay over the map's PLOT AREA (heads / leaders / live segments / pills): clipped like a layout image, never catches the mouse */
 .ov svg{{position:absolute;left:0;top:0;width:100%;height:100%;display:block;}}
-.ov .ov-head{{position:absolute;left:0;top:0;width:44px;height:44px;will-change:transform;transform-origin:50% 50%;user-select:none;}}   /* ONE base SVG per role, rotated with the transform */
-.ov .ov-pill{{position:absolute;left:0;top:0;white-space:nowrap;font:500 13px/1.15 {T.MONO};letter-spacing:0;color:{T.INK};background:{T.CARD};border:2px solid {T.RULE};padding:2px 3px;box-sizing:border-box;will-change:transform;}}   /* track-number pill: the annotation look (primary ink, CARD, 2 px role-colour border) */
+.ov .ov-head{{position:absolute;left:0;top:0;width:44px;height:44px;will-change:transform;transform-origin:50% 50%;user-select:none;filter:drop-shadow(0 0 3px #000);}}   /* ONE base SVG per role, rotated with the transform */
+.ov .ov-pill{{position:absolute;left:0;top:0;white-space:nowrap;font:500 15px/1.15 {T.MONO};letter-spacing:0;color:{T.INK};background:{T.CARD};border:2px solid {T.RULE};padding:2px 3px;box-sizing:border-box;will-change:transform;}}   /* track-number pill: the annotation look (primary ink, CARD, 2 px role-colour border) */
 .g{{display:inline-flex;align-items:center;line-height:1;flex:none;}} .g svg{{width:1em;height:1em;display:block;}}
 .gw{{display:inline-flex;align-items:center;gap:.3em;vertical-align:text-bottom;}}
 .g.ok{{color:{T.GREEN};}} .g.amber,.g.pause,.g.reset{{color:{T.AMBER};}} .g.fail{{color:{T.FAIL};}} .g.na{{color:{T.INK3};}} .g.red{{color:{T.RED};}}
@@ -829,9 +831,9 @@ function mpp(){                                            // metres per pixel o
   if(fl&&fl.xaxis&&fl.xaxis.range&&fl.width){ var w=Math.max(1,fl.width-fl.margin.l-fl.margin.r); return Math.abs(fl.xaxis.range[1]-fl.xaxis.range[0])/w; }
   var v=(typeof VIEW!=="undefined"&&VIEW.applied)||null, p=plotPx(); return v?Math.abs(v.x[1]-v.x[0])/p.w:1.0;
 }
-function iconPx(){                                        // the icon's ON-SCREEN edge: ICON_PX x text scale, capped at 10 % of the map's PLOT-AREA HEIGHT (>= 16): constant whatever the zoom,
-  var sc=(UI&&UI.text_scale)||1, ph=plotPx().h;            // 44 / 51 px on a >= 440 / 510 px plot area, 37 px on a 1366x768 laptop (2026-09-15: two 44 px vehicles 4 px apart on a 267 px map read as one blob)
-  return Math.max(16,Math.min(Math.round(ICON_PX*sc),Math.round(ICON_FRAC*ph)));
+function iconPx(){                                        // the icon's ON-SCREEN edge: ICON_PX x text scale, capped at ICON_FRAC (14 %) of the map's PLOT-AREA HEIGHT (>= 32): constant whatever the zoom,
+  var sc=(UI&&UI.text_scale)||1, ph=plotPx().h;            // 44 px on a >= 315 px plot area, 37 px on a 267 px laptop map (2026-09-17: the 10 % cap gave 27 px vehicles on a 1366x768 laptop — unreadable on satellite)
+  return Math.max(32,Math.min(Math.round(ICON_PX*sc),Math.round(ICON_FRAC*ph)));
 }
 function iconSizeM(){ return iconPx()*mpp(); }             // the same edge in metres at the current scale (diagnostics)
 function isPill(a){ return !!(a&&a.name&&String(a.name).indexOf("pill_")===0); }
@@ -944,7 +946,7 @@ def responsive_js(L: dict | None = None) -> str:
 // ── responsive geometry (the iframe knows its width; Streamlit only knows the preset's height) ──
 var PANEL={int(L['panel'])}, HEADER={int(L['header'])}, SPLIT=[{int(L['split'][0])},{int(L['split'][1])}], SPLIT3=[{int(L['split3'][0])},{int(L['split3'][1])},{int(L['split3'][2])}];
 var SEP_FRAC={SEP_FRAC}, SEP_FRAC3={SEP_FRAC3}, BP={int(BREAKPOINT_PX)}, UW={int(ULTRAWIDE_PX)}, MIN_CARD={int(MIN_CARD_PX)}, ERR_HDR={int(ERR_HDR_PX)}, ERR_T={ERR_T}, ERR_B={ERR_B}, ERR_GAP={ERR_GAP}, ERR_MIN={ERR_MIN_PX}, SEP_MIN={SEP_MIN_PX};
-var ICON_PX=44, ICON_FRAC=0.10, LEADER_MAX_PX=90, LEADER_MIN_PX=18;     // vehicle icon edge ON SCREEN (x text scale, <= ICON_FRAC x the plot-area height) and the 5 s velocity leader's on-screen length cap / floor
+var ICON_PX=44, ICON_FRAC=0.14, LEADER_MAX_PX=90, LEADER_MIN_PX=18;     // vehicle icon edge ON SCREEN (x text scale, <= ICON_FRAC x the plot-area height) and the 5 s velocity leader's on-screen length cap / floor
 var COL_GAP={COL_GAP_PX}, MAP_T0={map_top_nolegend_px()}, ONE_RIGHT_MIN={ONE_RIGHT_MIN_PX}, ONE_SEP={ONE_SEP_PX}, ONE_ERR={ONE_ERR_PX}, ONE_VEL={ONE_VEL_PX}, VEL_STRIP={VEL_STRIP_PX}, VEL_STRIP_MIN={VEL_STRIP_MIN_PX}, VEL_STRIP_FRAC={VEL_STRIP_FRAC}, ONE_MAP_FRAC={ONE_MAP_FRAC}, FONT_BP=1400, CARD_PAD_X=0.004, VEL_COL_GAP=0.03;
 var MAP_M={json.dumps(map_margin_px(L['font_px'], L.get('text_scale', 1.0)))};   // the map figure's FIXED margins (ih.plots.map_margin at this font / text scale): plotPx()'s pre-paint fallback
 var UI={{font_px:{int(L['font_px'])},line_w:{float(L['line_w'])},preset:{json.dumps(L['preset'])},text_scale:{float(L.get('text_scale', 1.0))}}};
@@ -1364,7 +1366,7 @@ def panel_core_js(L: dict | None = None) -> str:
     preview and the JS test harness feed applyEnvelope() synthetic envelopes."""
     L = L or LAYOUT
     return (f"""
-var BASE="", CFG={{scrollZoom:true,displayModeBar:"hover",displaylogo:false,responsive:false,doubleClick:false}}, GL=false;
+var BASE="", CFG={{scrollZoom:true,displayModeBar:false,displaylogo:false,responsive:false,doubleClick:false}}, GL=false;
 function cfgFor(k){{ return k==="map" ? CFG : Object.assign({{}},CFG,{{displayModeBar:false}}); }}   // 2026-09-14: the hover modebar sat over the first card's readout — the card figures (sep / err / vel) show none; the map keeps it   // responsive:false — WE resize (applyGeometry -> Plots.resize); plotly's own window listener fired on a plot being torn down by an iframe remount (uncaught "_plots is undefined")
 var stamp=null, have={{map:"",sep:"",err:"",vel:"",meas:""}}, made={{}}, fetching=false, reacting=false, satImgs=null, DEAD=false;
 try{{ window.addEventListener("pagehide",function(){{ DEAD=true; }}); }}catch(e){{}}                                                 // the iframe is being replaced (preset / text size): stop touching plotly

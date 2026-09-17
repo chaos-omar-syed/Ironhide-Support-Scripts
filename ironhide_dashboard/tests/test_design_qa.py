@@ -229,7 +229,7 @@ def test_f_palette_entities_ramps_status_and_track_colours_come_from_the_ramps()
     meas_tracks = [t for t in figs["meas"]["data"] if (t.get("name") or "").startswith("#") and t.get("line")]
     assert meas_tracks and {t["line"]["color"] for t in meas_tracks} <= set(PL.RAMP_TGT) | set(PL.RAMP_ITC) | {PL.RAMP_FOLD}
     assert {t["line"]["dash"] for t in meas_tracks} <= set(PL.STEP_DASH)
-    map_tracks = [t for t in figs["map"]["data"] if "track" in (t.get("name") or "") and t.get("line")]
+    map_tracks = [t for t in figs["map"]["data"] if "track" in (t.get("name") or "") and t.get("line") and not (t.get("name") or "").startswith("_halo")]   # 2026-09-17: the halo is not a series
     assert map_tracks and {t["line"]["color"] for t in map_tracks} <= set(PL.RAMP_TGT) | set(PL.RAMP_ITC) | {PL.RAMP_FOLD, T.GREY_TRACK}
     err_lines = [t for t in figs["err"]["data"] if (t.get("name") or "").startswith("track #") and t.get("line") and "±" not in t["name"]]
     for t in err_lines:
@@ -240,7 +240,7 @@ def test_f_palette_entities_ramps_status_and_track_colours_come_from_the_ramps()
 
 
 # ── (g) figures ───────────────────────────────────────────────────────────────
-DECOR = ("leader", "radar", "raw obs", "±1σ", " matched", " start", " end", "coast strip", "blind zone", "_anchor")   # decorations (and invisible axis anchors) may skip the hover
+DECOR = ("leader", "radar", "raw obs", "±1σ", " matched", " start", " end", "coast strip", "blind zone", "_anchor", "_halo")   # decorations (and invisible axis anchors) may skip the hover
 
 
 def test_g_figures_legend_iff_two_series_solid_hairline_grids_no_dual_axes_ink_text_tooltips():
@@ -290,10 +290,11 @@ def test_g_figures_legend_iff_two_series_solid_hairline_grids_no_dual_axes_ink_t
                 assert t.get("hoverinfo") != "skip" or t.get("hovertemplate"), (k, name)              # a tooltip on every data series
     # the map pills: role colour on the border, primary ink on the text
     pills = {a["name"]: a for a in figs["map"]["layout"]["annotations"] if str(a.get("name", "")).startswith("pill_")}
-    assert set(pills) == {"pill_tgt", "pill_itc"}
+    assert set(pills) == {"pill_tgt"}                                                                      # 2026-09-17 hard rule: no interceptor-track pill
     assert pills["pill_tgt"]["font"]["color"] == T.INK and pills["pill_tgt"]["bordercolor"] == T.TARGET and pills["pill_tgt"]["borderwidth"] == 2
-    assert pills["pill_itc"]["font"]["color"] == T.INK and pills["pill_itc"]["bordercolor"] == T.INTERCEPTOR
-    # legend present exactly where >= 2 series: map (truths + tracks), sep (3D · horizontal · CPA), meas (grouped) — the error panel at
+    assert not any((t.get("name") or "").startswith("interceptor track") for t in figs["map"]["data"])    # ... and no interceptor-track trace
+    assert not any(re.fullmatch(r"#\d+ · interceptor.*", t.get("name") or "") for t in figs["meas"]["data"])
+    # legend present exactly where >= 2 series: map (truths + tracks), sep (truth · track · CPA), meas (grouped) — the error panel at
     # 07:24:15 grades ONE track (#203) and so carries none
     assert figs["map"]["layout"]["showlegend"] is True and figs["sep"]["layout"]["showlegend"] is True and figs["meas"]["layout"]["showlegend"] is True
     assert figs["err"]["layout"]["showlegend"] is False

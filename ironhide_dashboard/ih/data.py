@@ -132,6 +132,8 @@ STATE_DEFAULTS = {
     "track_events": [],  # [(t, role, old_id, new_id)] track-id changes this session (engine.analyze; capped at 50)
     "cpa_run": None,  # (sep, t, E, N, horiz) running closest-so-far (never gated)
     "cpa_ok": None,  # the last closest-so-far that PASSED the CPA gate (what the plots mark with the gold star)
+    "cpa_trk_run": None,  # (sep, t, E, N, horiz) running closest-so-far of interceptor truth <-> TARGET TRACK (engine, never gated)
+    "cpa_trk_ok": None,  # ... the last one that passed the same CPA gate (A["cpa_trk"]: the target-red ring ★ on the separation card)
     "last_snap": None,
 }
 
@@ -598,7 +600,15 @@ def roles_label() -> str:
 
 def set_roles(tgt_ids: list[str], itc_ids: list[str]) -> str | None:
     """Apply an assignment (both lists) — refused with a message when an id sits in both roles; on success the
-    live buffers / derived state are cleared so the Live page re-merges truth immediately."""
+    DERIVED state is cleared so the Live page re-merges truth immediately.
+
+    2026-09-17: the raw live buffer is KEPT.  ih.feed keeps its truth / track / obs rows PER MAVLINK ID and
+    applies the roles at merge time (feed._buffers_to_snapshot -> feed_role), so a role change re-merges the
+    whole buffered window on the very next tick — dropping ``_live_buf`` only threw away up to 180 s of truth
+    and tracks (and, with ``live_ant``, re-probed the antenna origin), and after a role change mid-engagement
+    the separation series restarted at the click: the CPA of a pass that had just happened was lost (MRU91 run
+    3212ae22, assigning mav14550_1_1 as TARGET once its feed appeared at 06:50:37).  Re-merging from the kept
+    buffer recovers it (simulated: 28.4 m @ 06:55:47 kept vs 52.6 m with the buffer dropped)."""
     both = sorted(set(map(str, tgt_ids)) & set(map(str, itc_ids)))
     if both:
         return f"{', '.join(both)} cannot be both TARGET and INTERCEPTOR — previous assignment kept"
@@ -606,8 +616,6 @@ def set_roles(tgt_ids: list[str], itc_ids: list[str]) -> str | None:
     s["truth_tgt_ids"] = [str(x) for x in tgt_ids]
     s["truth_itc_ids"] = [str(x) for x in itc_ids]
     s["role_ids"] = {"target": list(s["truth_tgt_ids"]), "interceptor": list(s["truth_itc_ids"])}   # contract echo (C reads P["role_ids"])
-    s.pop("_live_buf", None)
-    s.pop("live_ant", None)
     reset_derived()
     return None
 
@@ -878,6 +886,8 @@ def seek(t: float, keep_playing: bool | None = None) -> None:
     s["playing"] = bool(was)
     s["cpa_run"] = None
     s["cpa_ok"] = None
+    s["cpa_trk_run"] = None          # the track-CPA pair (interceptor truth <-> target track, engine) follows the truth pair
+    s["cpa_trk_ok"] = None
     s["tgt_tid"] = None
     s["track_events"] = []           # a seek is a new context: no handover carried across it
     s["_yrng_mem"] = {}              # ... nor the held axis ranges (ih.plots.stable_range)
@@ -946,6 +956,8 @@ def set_flight(n: int) -> None:
 def reset_derived() -> None:
     st.session_state["cpa_run"] = None
     st.session_state["cpa_ok"] = None
+    st.session_state["cpa_trk_run"] = None   # the track-CPA pair (engine) resets with the truth pair
+    st.session_state["cpa_trk_ok"] = None
     st.session_state["tgt_tid"] = None
     st.session_state["last_snap"] = None
     st.session_state["track_events"] = []   # engine.analyze appends (t, role, old_id, new_id) on every target / interceptor track-id change
