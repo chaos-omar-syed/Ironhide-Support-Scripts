@@ -1069,7 +1069,7 @@ def meas_space(snap: dict, A: dict, window_s: float) -> dict:
             return None
         az, el, rng_m, _ = aer_rr(w[:, TR["E"]], w[:, TR["N"]], w[:, TR["U"]])
         rng, rr = bistatic_series(w[:, TR["E"]], w[:, TR["N"]], w[:, TR["U"]], w[:, TR["vE"]], w[:, TR["vN"]], w[:, TR["vU"]], tx_enu)
-        return {"t": w[:, 0], "az": az, "el": el, "rng": rng, "rr": rr, "rng_mono": rng_m, "alt": w[:, TR["U"]] + float(ant[2])}   # 2026-09-17 pm: altitude row (m HAE)
+        return {"t": w[:, 0], "az": az, "el": el, "rng": rng, "rr": rr, "rng_mono": rng_m, "alt": w[:, TR["U"]]}   # altitude row: metres ABOVE THE RADAR antenna (2026-09-18: was HAE — read as "200 m from the antenna")
 
     out["truth"], out["truth_itc"] = truth_series(Tt), truth_series(Ti)
     tracks = snap.get("tracks") or {}
@@ -1116,7 +1116,7 @@ def meas_space(snap: dict, A: dict, window_s: float) -> dict:
         else:
             on = np.ones(len(w), bool)
         out["tracks"].append({"tid": int(tid), "role": role, "t": w[:, 0], "az": az, "el": el, "rng": rng, "rr": rr, "on": on,
-                              "on_tgt": on_tgt, "on_itc": on_itc, "kind": state_kind(w), "alt": w[:, TK["U"]] + float(ant[2])})
+                              "on_tgt": on_tgt, "on_itc": on_itc, "kind": state_kind(w), "alt": w[:, TK["U"]]})
     obs = snap.get("obs")
     if obs is not None and len(obs):
         o = np.asarray(obs, float)

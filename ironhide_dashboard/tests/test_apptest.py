@@ -1308,7 +1308,7 @@ def test_measurement_space_quad_truth_tracks_obs():
     L, data = m["layout"], m["data"]
     assert L["height"] == 640 and L["uirevision"] == PL.UIREV["meas"] == "live-meas" and L["showlegend"] is True and L["legend"]["font"]["size"] >= 12
     titles = [a for a in L["annotations"] if (a.get("name") or "").startswith("title_")]
-    assert [a["text"] for a in titles] == ["<b>BISTATIC RANGE (KM)</b>", "<b>BISTATIC RANGE RATE (M/S)</b>", "<b>AZIMUTH (°)</b>", "<b>ELEVATION (°)</b>", "<b>ALTITUDE (M HAE)</b>"]
+    assert [a["text"] for a in titles] == ["<b>BISTATIC RANGE (KM)</b>", "<b>BISTATIC RANGE RATE (M/S)</b>", "<b>AZIMUTH (°)</b>", "<b>ELEVATION (°)</b>", "<b>ALTITUDE (M ABOVE RADAR)</b>"]
     assert all(a["font"]["size"] == PL.MEAS_TITLE_PX for a in titles)   # the measurement quad keeps its 12 px panel titles
     axes = {k: v for k, v in L.items() if k.startswith(("xaxis", "yaxis"))}
     assert set(axes) == {"xaxis", "xaxis2", "xaxis3", "xaxis4", "xaxis5", "yaxis", "yaxis2", "yaxis3", "yaxis4", "yaxis5"} and not any("overlaying" in v for v in axes.values())
