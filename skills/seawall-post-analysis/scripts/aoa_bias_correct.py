@@ -981,7 +981,6 @@ def make_png(out_png, title, T_all, samples, fit, az_b, el_b, tz):
             Sc = apply_correction(S, ab, eb)
             a.plot(Sc[:, 1], Sc[:, 2], ".", ms=4, color=colors[tid], alpha=0.9,
                    label=f"trk {tid}" if k == 0 and len(samples) <= 8 else None)
-        a.plot(0, 0, "^", color=INK, ms=9)
         a.set_aspect("equal")
         a.set_xlabel("East (m)")
         a.set_ylabel("North (m)")
@@ -1046,38 +1045,81 @@ def make_png(out_png, title, T_all, samples, fit, az_b, el_b, tz):
     plt.close(fig)
 
 
-def make_simple_png(out_png, label, T_all, samples, az_b, el_b, raw_med, cor_med):
-    """Two large panels only: track vs truth before and after the az correction."""
+def make_track_pages(outd, label, T_all, samples, az_b, el_b, tz, max_pages=12):
+    """One PNG per track (plus an all-tracks page when there are several).
+    Each page = 4 panels: top-down BEFORE / AFTER (row 1) and azimuth error vs
+    time BEFORE / AFTER (row 2). Thick lines; no radar / antenna marker."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(1, 2, figsize=(18, 6.2), facecolor=SURFACE)
-    fig.suptitle(f"{label}   azimuth bias {az_b:+.2f}°  →  correction {-az_b:+.2f}°",
-                 fontsize=20, fontweight="bold", color=INK, x=0.02, ha="left")
-    for k, (ttl, ab, eb, med) in enumerate((("BEFORE  (as reported)", 0.0, 0.0, raw_med),
-                                            (f"AFTER  ({-az_b:+.2f}° applied)", az_b, el_b, cor_med))):
-        a = ax[k]
-        a.set_facecolor(SURFACE)
-        a.grid(True, color=GRID, lw=0.8)
-        for sp in ("top", "right"):
-            a.spines[sp].set_visible(False)
-        for i, ch in enumerate(_segs(T_all)):
-            a.plot(ch[:, 1], ch[:, 2], color=TRUTH_COLOR, lw=2.6, label="drone GPS (MAVLink)" if i == 0 else None)
-        first = True
-        for tid, tgt, S in samples:
-            Sc = apply_correction(S, ab, eb)
-            a.plot(Sc[:, 1], Sc[:, 2], ".", ms=5, color=RAW_COLOR if k == 0 else CORR_COLOR,
-                   label=("radar tracks" if first else None))
-            first = False
-        a.plot(0, 0, "^", color=INK, ms=12, label="radar")
-        a.set_aspect("equal")
-        a.set_xlabel("East (m)", fontsize=13)
-        a.set_ylabel("North (m)", fontsize=13)
-        a.set_title(f"{ttl}   median miss {med:.0f} m", loc="left", fontsize=15, fontweight="bold")
-        a.legend(loc="upper left", fontsize=12, frameon=False)
-    fig.tight_layout(rect=(0, 0, 1, 0.92))
-    fig.savefig(out_png, dpi=110)
-    plt.close(fig)
+    import matplotlib.dates as mdates
+    pages = ([("all tracks", "all", samples)] if len(samples) > 1 else [])
+    ranked = sorted(samples, key=lambda x: -len(x[2]))[:max(0, max_pages)]   # longest tracks first
+    pages += [(f"trk {tid}", f"trk{tid}", [(tid, tgt, S)]) for tid, tgt, S in samples if any(tid == r[0] for r in ranked)]
+    if len(samples) > max_pages:
+        print(f"  NOTE: {len(samples)} tracks, per-track pages for the {max_pages} longest (raise --pages for more)")
+    colors = {tid: TRACK_PALETTE[i % len(TRACK_PALETTE)] for i, (tid, _, _) in enumerate(samples)}
+    written = []
+    for name, tag, ss in pages:
+        t_lo = min(S[0, 0] for _, _, S in ss) - 5
+        t_hi = max(S[-1, 0] for _, _, S in ss) + 5
+        Tw = T_all[(T_all[:, 0] >= t_lo) & (T_all[:, 0] <= t_hi)]
+        fig, ax = plt.subplots(2, 2, figsize=(20, 13), facecolor=SURFACE)
+        daz_all = np.concatenate([errors(S)[0] for _, _, S in ss])
+        own = float(np.median(daz_all))
+        lim = max(2.0, min(10.0, float(np.percentile(np.abs(daz_all), 98)) * 1.3))
+        fig.suptitle(f"{label} — {name}   az error {own:+.2f}° (n={len(daz_all)})   pooled correction {-az_b:+.2f}° applied",
+                     fontsize=20, fontweight="bold", color=INK, x=0.02, ha="left")
+        for k, (ttl, ab, eb) in enumerate((("BEFORE", 0.0, 0.0), (f"AFTER ({-az_b:+.2f}°)", az_b, el_b))):
+            # --- top-down
+            a = ax[0, k]
+            a.set_facecolor(SURFACE); a.grid(True, color=GRID, lw=1.0)
+            for sp in ("top", "right"): a.spines[sp].set_visible(False)
+            for i, chk in enumerate(_segs(Tw)):
+                a.plot(chk[:, 1], chk[:, 2], color=TRUTH_COLOR, lw=4.0, label="drone GPS (MAVLink)" if i == 0 else None)
+            miss = []
+            for tid, tgt, S in ss:
+                Sc = apply_correction(S, ab, eb)
+                col = colors[tid] if len(ss) > 1 else (RAW_COLOR if k == 0 else CORR_COLOR)
+                for chk in _segs(Sc):
+                    a.plot(chk[:, 1], chk[:, 2], "-", lw=3.0, color=col, alpha=0.95)
+                a.plot([], [], "-", lw=3.0, color=col, label=f"trk {tid}")
+                miss.append(np.hypot(*(Sc[:, 1:3] - S[:, 8:10]).T))
+            med = float(np.median(np.concatenate(miss)))
+            a.set_aspect("equal"); a.set_xlabel("East (m)", fontsize=13); a.set_ylabel("North (m)", fontsize=13)
+            a.set_title(f"Top-down — {ttl}   median miss {med:.0f} m", loc="left", fontsize=15, fontweight="bold")
+            a.legend(loc="upper left", fontsize=12, frameon=False, ncol=2)
+            # --- azimuth error vs time
+            a = ax[1, k]
+            a.set_facecolor(SURFACE); a.grid(True, color=GRID, lw=1.0)
+            for sp in ("top", "right"): a.spines[sp].set_visible(False)
+            for tid, tgt, S in ss:
+                daz = errors(S)[0] - ab
+                col = colors[tid] if len(ss) > 1 else (RAW_COLOR if k == 0 else CORR_COLOR)
+                td = [datetime.fromtimestamp(x, tz=tz) for x in S[:, 0]]
+                for i0, i1 in _seg_idx(S[:, 0]):
+                    a.plot(td[i0:i1], daz[i0:i1], "-", lw=2.8, color=col, label=f"trk {tid}" if i0 == 0 else None)
+            a.axhline(0, color=INK, lw=1.4)
+            a.axhline(float(np.median(daz_all)) - ab, color=INK2, lw=1.6, ls="--",
+                      label=f"median {float(np.median(daz_all)) - ab:+.2f}°")
+            a.set_ylim(-lim, lim)                      # same scale before/after so the shift is visible
+            a.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S", tz=tz))
+            a.set_ylabel("azimuth error, track − truth (°)", fontsize=13)
+            a.set_title(f"Azimuth error vs time — {ttl}", loc="left", fontsize=15, fontweight="bold")
+            a.legend(loc="upper right", fontsize=12, frameon=False, ncol=3)
+        fig.tight_layout(rect=(0, 0, 1, 0.955))
+        path = os.path.join(outd, f"aoa_bias_page_{tag}.png")
+        fig.savefig(path, dpi=110); plt.close(fig); written.append(path)
+    return written
+
+
+def _seg_idx(t, gap=6.0):
+    s = 0
+    for i in range(1, len(t)):
+        if t[i] - t[i - 1] > gap:
+            yield s, i
+            s = i
+    yield s, len(t)
 
 
 def _segs(T, gap=6.0):
@@ -1113,8 +1155,6 @@ def make_html(out_html, title, T_all, samples, fit, az_b, el_b, tz, summary):
                                      text=[datetime.fromtimestamp(t, tz=tz).strftime("%H:%M:%S") for t in S[:, 0]],
                                      hovertemplate="%{text}<br>E %{x:.0f} N %{y:.0f}<extra>trk " + str(tid) + "</extra>"),
                           row=1, col=col)
-        fig.add_trace(go.Scatter(x=[0], y=[0], mode="markers", marker=dict(symbol="triangle-up", size=12, color=INK),
-                                 showlegend=False, hoverinfo="skip"), row=1, col=col)
     tt = np.concatenate([S[:, 0] for _, _, S in samples])
     daz = np.concatenate([errors(S)[0] for _, _, S in samples])
     de = np.concatenate([errors(S)[1] for _, _, S in samples])
@@ -1177,6 +1217,8 @@ def main():
     fitg.add_argument("--no-el", action="store_true", help="fit/correct azimuth only")
     fitg.add_argument("--alt-units", default="feet", choices=["feet", "meters"])
     fitg.add_argument("--geoid-n", type=float, default=None)
+    ap.add_argument("--pages", type=int, default=12,
+                    help="max per-track 4-panel pages (longest tracks first; 0 = all-tracks page only)")
     ap.add_argument("--label", default=None)
     ap.add_argument("--out", default=None, help="output dir (default aoa_bias_<label>)")
     args = ap.parse_args()
@@ -1337,8 +1379,7 @@ def main():
         T_all = np.vstack([truths[g] for g in sorted({g for _, g, _ in samples})])
         T_all = T_all[np.argsort(T_all[:, 0])]
     make_png(os.path.join(outd, "aoa_bias.png"), title, T_all, samples, fit, az_b, el_b, tz)
-    make_simple_png(os.path.join(outd, "aoa_bias_simple.png"), label, T_all, samples, az_b, el_b,
-                    float(np.median(raw_h)), float(np.median(cor_h)))
+    pages = make_track_pages(outd, label, T_all, samples, az_b, el_b, tz, max_pages=args.pages)
     make_html(os.path.join(outd, "aoa_bias.html"), title, T_all, samples, fit, az_b, el_b, tz, summary)
     json.dump(summary, open(os.path.join(outd, "summary.json"), "w"), indent=1, default=float)
 
@@ -1356,7 +1397,8 @@ def main():
     print(f"  horiz err median  raw {np.median(raw_h):.0f} m  ->  corrected {np.median(cor_h):.0f} m"
           f"   (p90 {np.percentile(raw_h, 90):.0f} -> {np.percentile(cor_h, 90):.0f})")
     print(f"  suggested yaw_offset correction: {-az_b:+.2f}° (sign: see notes in summary.json)")
-    print(f"\nwrote {outd}/aoa_bias.png, aoa_bias_simple.png, aoa_bias.html, summary.json")
+    print(f"\nwrote {outd}/aoa_bias.png, aoa_bias.html, summary.json + {len(pages)} page(s): "
+          + ", ".join(os.path.basename(x) for x in pages))
 
 
 if __name__ == "__main__":

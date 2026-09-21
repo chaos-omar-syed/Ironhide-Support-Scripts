@@ -1,0 +1,99 @@
+{
+ "source": "archive /home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_9-14/2026-09-15/ce98ea94_Flight_1",
+ "label": "MRU91 9/15 Flight 1 (run ce98ea94)",
+ "correlation_engine": "geometry: corr_lib moving-truth gate (FALLBACK \u2014 no chaotic correlation available)",
+ "chaotic_info": {},
+ "generated": "2026-09-15T17:39:00-07:00",
+ "antenna_origin_lat_lon_haeM": [
+  33.74802633417032,
+  -115.3391963841232,
+  139.10735000047552
+ ],
+ "windows": [
+  [
+   "2026-09-15 16:50:00",
+   "2026-09-15 17:01:00"
+  ]
+ ],
+ "jobs": {},
+ "jobs_missing": [],
+ "correlated_pairs": [
+  {
+   "track": 2613,
+   "target": "mavlink_2_1",
+   "n": 517,
+   "med_horiz_m": 30.0
+  }
+ ],
+ "fit_samples": 432,
+ "fit_tracks": 1,
+ "fit": {
+  "az_bias_deg": {
+   "n": 432,
+   "median": 0.28287261379578865,
+   "mad_sigma": 0.48353066586573124,
+   "ci95": [
+    0.22535890712395598,
+    0.36862477864991305
+   ],
+   "mean": 0.22206438034645096,
+   "std": 0.4968858288650413
+  },
+  "el_bias_deg": {
+   "n": 432,
+   "median": 0.25665452274406697,
+   "mad_sigma": 0.17447083515414646,
+   "ci95": [
+    0.22495308054594426,
+    0.2839262045126443
+   ],
+   "mean": 0.24802671035517782,
+   "std": 0.3700085959880597
+  },
+  "range_bias_m": {
+   "n": 432,
+   "median": -10.495679748981956,
+   "mad_sigma": 9.151656267962494,
+   "ci95": [
+    -11.002497031267467,
+    -9.234055419816002
+   ],
+   "mean": -9.768238242329959,
+   "std": 8.01503608345796
+  },
+  "az_vs_range_slope_deg_per_km": -0.15458670141155592,
+  "az_equiv_lateral_offset_m": 15.002573744306694,
+  "el_equiv_alt_offset_m": 15.323200798193927,
+  "per_track": {
+   "2613": {
+    "target": "mavlink_2_1",
+    "n": 432,
+    "az_med": 0.28287261379578865,
+    "el_med": 0.25665452274406697,
+    "rng_med_m": 3339.4039730874883
+   }
+  },
+  "per_track_az_spread_deg": 0.0,
+  "track_alt_pinned": false
+ },
+ "applied": {
+  "az_rotation_deg": -0.28287261379578865,
+  "el_rotation_deg": -0.25665452274406697
+ },
+ "horiz_err_m": {
+  "raw_median": 26.81602396396286,
+  "corrected_median": 23.514858038767287,
+  "raw_p90": 52.995133574550366,
+  "corrected_p90": 53.90531388699814
+ },
+ "alt_err_m": {
+  "raw_median": 15.20182758556161,
+  "corrected_median": -0.15158721639180328
+ },
+ "yaw_offset_correction_deg": -0.28287261379578865,
+ "notes": [
+  "az_bias = median(track_bearing - truth_bearing); + = track reads clockwise of truth",
+  "yaw_offset_correction_deg = -az_bias (array physically CW of model makes tracks read CCW/low); verify the sign against the unit's yaw_offset_rad convention before editing config",
+  "el bias and a truth-altitude datum error are indistinguishable from one target; el_equiv_alt_offset_m gives the same number in meters"
+ ]
+}
