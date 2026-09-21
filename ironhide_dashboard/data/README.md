@@ -31,12 +31,14 @@ data/
     ql_f1_full.npz                   # optional (IH_OBS_NPZ)
   archives/                          # IH_ARCHIVE_ROOT — written by the dashboard's "Save data to archive" or by quickdump.py
     2026-09-15/
-      flights.json                   # same schema; each flight entry carries "dir": "<run8>_<label>" (relative to this day)
+      flights.json                   # same schema; each flight entry carries "dir": "<run8>_<label>" (relative to this day) and, after the
+                                     #   airborne audit, "saved_t0"/"saved_t1" (raw window), "airborne_segments", "airborne_s" (t0/t1 = trimmed)
       <run8>_<label>/                # same layout as a quickdump dir (mavlink/ tracks/ obs/ meta.json)
 ```
 
 `python quickdump.py HHMM HHMM <name> --run run_<hex> --mru NN --register` writes a window of a live run into the
 archive root and registers it in `flights.json` — identical to the dashboard's Save card (both call
-`ih.archive.save_archive`).
+`ih.archive.save_archive`, which also runs the airborne audit; `python -m ih.archive audit --root … [--day …] [--dry-run]`
+re-audits existing days).
 
 The built-in `2026-08-28` day is the MRU91 Seawall intercept test; it is range data and is distributed separately.

@@ -8,10 +8,31 @@ replayable CSV archive.
 * **Data source page** (landing) — *Connect*: type the MRU number (→ `10.1NN.28.205:27017`, or a custom host /
   Tailscale IP under *Advanced*), pick the run, assign MAVLink target ids to the TARGET / INTERCEPTOR roles;
   *Archive replay*: pick a saved flight; *Save data to archive*: dump a window of the live run.
-* **Live page** — one-screen panel: map (satellite basemap, truth + tracks, blind-range rings), separation /
-  CPA, error time series, measurement-space quad; tiles for track health; sidebar transport (archive) or unit
-  block (live) plus the display controls (screen preset, text size, metrics window, frame mode, freeze …).
+* **Live page** — one-screen panel: top-down map (satellite basemap, both drones' MAVLink truth, the target's
+  radar track and the interceptor's radar track with its own state tag, blind-range rings), separation card with
+  the CPA line, four track-error cards and three velocity cards for the **target** track; below it two collapsible
+  measurement-space cards — *target track vs target truth* and *interceptor track vs interceptor truth* — each with
+  bistatic range / range rate / azimuth / elevation and an altitude row; one status row with the target track's
+  state counts and update rate; sidebar transport (archive) or unit block (live) plus the display controls.
 * Archive replay runs the **same engine as live** (it is the live-path test harness).
+
+### Reading the figures
+
+* **Interceptor radar track** appears on the top-down map (blue dashed, "#id" pill, "INT #id STATE" tag) and on its
+  own measurement card only. It is never drawn on the target's error / velocity / separation / measurement cards and
+  never enters a metric — those grade the TARGET track.
+* **CPA** = closest 3-D approach between the two drones' MAVLink truth while both are airborne (≥ 20 m above the
+  radar, target moving) and the pass validated (separation rose again by ≥ 20 m / 15 % within 10 s). One gold line
+  "CPA 28 m" on the separation card, a gold hairline on every error / velocity card, a ★ on the map; it is pinned at
+  the window's left edge ("◂") once it scrolls out. Until a pass validates under the gate the line marks the airborne
+  closest approach so far, in the same words. The interceptor-truth-to-TARGET-TRACK CPA is a number in the
+  *More details* tiles only.
+* **Measurement cards**: the solid thick line is truth in the role colour (red target, blue interceptor); radar tracks
+  are dashed in ink (white / grey by first appearance), ★ / ✕ mark where a track joins / leaves its drone, "→ departed"
+  and "→ interceptor (stolen)" in the panel header strip; y-ranges span truth plus the on-side track samples. The
+  altitude row is **metres above the radar antenna** (footnote gives the antenna HAE and the conversion).
+* **Units**: map E/N in metres about the antenna; MAVLink wire altitude is feet MSL and is converted on ingest;
+  no plot shows feet.
 
 ## Requirements
 
@@ -59,7 +80,7 @@ file watcher resets module singletons such as the panel server; never run the se
 | Optional local track_correlation checkout | `IH_TRACK_CORRELATION=<dir>` (adds `blindzone_map` → blind-range rings; the dashboard's own copies of `corr_lib` / `spa_errors` / `live_correlator` live in `ih/vendor/`) |
 | plotly.min.js served to the panel | `IH_PLOTLY_JS=<file>`; default = the copy bundled with the `plotly` python package (same plotly.js 3.6.0), else a CDN redirect |
 | Screen presets | `ih/liveserver.py` `PRESETS` (Laptop 600 px, Desktop 1080p 860 px, Large 1440p 1180 px panel height); sidebar *Screen size* / `?screen=` |
-| Deep link | `?flight=1&t=07:22:31[&play=1][&screen=Laptop][&ds=live]` |
+| Deep link | `?flight=1&t=07:22:31[&play=1][&screen=Laptop][&ds=live][&meas=1][&itc=1]` (`meas` / `itc` open the target / interceptor measurement cards; keyboard `m` toggles the target card) |
 
 ## Data
 
@@ -68,6 +89,15 @@ Range data is **not** in the repo. `data/README.md` documents the two roots and 
 Without any data the Data source page shows where to put it and live mode is fully usable.
 `quickdump.py HHMM HHMM <name> --run run_<hex> --mru NN --register` dumps a window of a live run from the command
 line through the same writer as the Save card.
+
+Every save runs an **airborne audit**: the flying legs of each role's MAVLink truth (speed / height gates, 20 s lead,
+15 s tail, gaps < 30 s merged) trim the replay window to the time the drones actually flew (intersection of the roles
+that flew; a solo sortie keeps its own legs). The raw window is kept as `saved_t0` / `saved_t1` and the legs as
+`airborne_segments` in `flights.json`; the sidebar shows "airborne hh:mm:ss–hh:mm:ss · N min". Re-audit older saves with
+
+```bash
+python -m ih.archive audit --root <IH_ARCHIVE_ROOT> [--day 2026-09-17] [--dry-run]     # writes flights.json, keeps a .bak
+```
 
 ## Optional: chaos-spa (official grading)
 
