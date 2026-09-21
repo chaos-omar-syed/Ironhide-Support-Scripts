@@ -7,6 +7,7 @@ with a README that explains what it does, how it works, and how to run it.
 |---|---|
 | [aoa_bias_correct/](aoa_bias_correct/) | Measure the radar's angle-of-arrival (azimuth / elevation) bias against MAVLink drone GPS truth for a given MRU, run and job range, then show tracks before and after the correction. |
 | [skills/seawall-post-analysis/](skills/seawall-post-analysis/) | **Claude Code skill**: the full post-analysis of a radar test day or campaign (dump → flight manifest → conditioning → analyses → day reports + rollup → narrative), built from the Seawall Week Report pipeline. The scripts do the deterministic work; the skill carries the judgment rules for the messy parts (track steals, frozen truth, duplicate ids, false passes). |
+| [ironhide_dashboard/](ironhide_dashboard/) | **Live radar dashboard** (Streamlit): connect to an MRU by number, watch MAVLink truth vs radar tracks on a satellite map with track-error, velocity, separation / CPA and measurement-space cards (target and interceptor), replay saved flights, save a live window to a replayable archive (auto-trimmed to the airborne time). Self-contained; optional chaos-spa grader. See its README for install/run and "Reading the figures". |
 
 ## Installing the skill
 

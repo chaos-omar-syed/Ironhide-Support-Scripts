@@ -686,7 +686,10 @@ def load_archive(path, t0, t1, target):
     """seawall_archiver CSV run dir -> (ant, truths, tracks). Offline mock source."""
     import pandas as pd
     meta = json.load(open(os.path.join(path, "meta.json")))
-    ant = tuple(meta["antenna_origin_lat_lon_haeM"])
+    ant = meta.get("antenna_origin_lat_lon_haeM") or meta.get("antenna") or meta.get("antenna_origin")
+    if ant is None:
+        sys.exit(f"{path}/meta.json has no antenna origin (keys antenna_origin_lat_lon_haeM / antenna / antenna_origin)")
+    ant = tuple(ant)
     truths = {}
     for f in sorted(os.listdir(os.path.join(path, "mavlink"))):
         tid = f[:-4]
@@ -696,6 +699,8 @@ def load_archive(path, t0, t1, target):
         df = df[(df.t_epoch >= t0) & (df.t_epoch <= t1) & (df.validposition > 0)]
         if len(df) < 5:
             continue
+        if "speed_mps" not in df.columns:            # dashboard/quickdump layout: derive from velocity
+            df = df.assign(speed_mps=np.hypot(df["vel_n_mps"].fillna(0), df["vel_e_mps"].fillna(0)))
         rows = df[["t_epoch", "E_m", "N_m", "U_m_hae", "speed_mps", "vel_n_mps",
                    "vel_e_mps", "vert_spd_wire_ftmin"]].to_numpy(float)
         T = clean_truth(rows)
