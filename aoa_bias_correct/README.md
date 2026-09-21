@@ -65,6 +65,19 @@ The console prints the same summary:
   suggested yaw_offset correction: +1.46° (sign: see notes in summary.json)
 ```
 
+## What the output looks like
+
+![Six-panel overview, 8/26 flight 1](examples/MRU91_9b22a989_flight1/aoa_bias.png)
+
+*`aoa_bias.png`: both before/after overlays, the horizontal-error histogram, az and el
+error against time with the fitted bias and its 95% CI, and az error against range
+(flat = a real angular bias).*
+
+![All-tracks page, 8/26 flight 1](examples/MRU91_9b22a989_flight1/aoa_bias_page_all.png)
+
+*`aoa_bias_page_all.png`: every track pooled on one page, same layout as the per-track
+pages below.*
+
 ## Reading the per-track pages
 
 ![8/26 flight 1, track 94](examples/MRU91_9b22a989_flight1/aoa_bias_page_trk94.png)
@@ -90,6 +103,23 @@ How to read them:
    altitude is pinned.
 
 ## How it works
+
+```mermaid
+flowchart LR
+    src[("MRU mongo run<br/>--mru --run --jobs")]
+    arc[("archive dir<br/>--archive --t0 --t1")]
+    dl["chaotic DataLoader<br/>tracks 143, obs 103, MAVLink 106"]
+    prep["prepare_grading_inputs<br/>recorrelate via obs history"]
+    grade["grade_correlated_tracks<br/>az / el / range error per sample"]
+    geo["geometry fallback<br/>moving-truth position gate"]
+    fit["robust bias fit<br/>median, MAD, bootstrap CI, slope vs range"]
+    corr["rotate every track state<br/>by -az_bias, -el_bias"]
+    out[/"aoa_bias_page_*.png, aoa_bias.png<br/>aoa_bias.html, summary.json"/]
+
+    src --> dl --> prep --> grade --> fit
+    arc --> geo --> fit
+    fit --> corr --> out
+```
 
 ### 1. Resolve the source
 
