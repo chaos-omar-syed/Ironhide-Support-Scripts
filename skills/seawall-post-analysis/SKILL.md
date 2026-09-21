@@ -5,6 +5,8 @@ description: Post-analysis of an MRU radar test day or campaign against MAVLink 
 
 # Seawall post-analysis
 
+Visual guide (pipeline diagram + screenshots of the reports): [README.md](README.md).
+
 You are the analyst. The scripts in `scripts/` do the deterministic work (dumping,
 segmentation, metrics, figures, report assembly). You do the judgment: which feed
 is the target, which passes are real, whether a track was stolen or merely dragged,

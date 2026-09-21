@@ -16,6 +16,78 @@ replayable CSV archive.
   state counts and update rate; sidebar transport (archive) or unit block (live) plus the display controls.
 * Archive replay runs the **same engine as live** (it is the live-path test harness).
 
+## What it looks like
+
+![Live page, Desktop preset, 8/28 flight 1 mid-engagement](docs/img/live_desktop_1080p.png)
+*Live page (Desktop 1080p preset), 8/28 flight 1 at 07:22:31. Left: top-down about the radar with both drones' MAVLink truth
+(red target, blue interceptor), the target's dashed radar track "#177" and the interceptor's track "#200 · COASTING" with its
+own state tag; the three velocity cards under it. Right: separation card with the gold "CPA 71 m" line and the four
+track-quality cards (azimuth, elevation, 3-D position, altitude error with ±1σ bands). Top row: clock, target track state,
+confirmed / tentative / coasting counts and update rate.*
+
+![Live page, Laptop preset](docs/img/live_laptop_engagement.png)
+*The same moment on the Laptop preset (1366×768): one-row layout, map square, separation card beside it; the error and
+velocity cards are below the fold.*
+
+![CPA pass](docs/img/live_cpa_pass.png)
+*The 07:23:47 pass: gold ★ + "CPA 53 m" on the map at the point of closest approach, the gold CPA line on the separation card,
+"INT #177 CONFIRMED · #203 CONFIRMED" on the map's top row after the track steal (the interceptor's radar track is drawn on the
+map only).*
+
+![Measurement space, target card](docs/img/measurement_target.png)
+*Measurement space · target track vs target truth: bistatic range and range rate, azimuth, elevation and altitude above the
+radar vs time. Solid red = target truth, dashed ink = radar tracks (★ joins, ✕ leaves, "→ interceptor (stolen)" in the header
+strip), grey dots = raw detections. Y-ranges follow truth plus the on-target track samples.*
+
+![Measurement space, interceptor card](docs/img/measurement_interceptor.png)
+*The interceptor's own card (collapsed by default): interceptor truth in blue with the interceptor's radar track, including a
+stolen target track's interceptor-side span. Nothing of the interceptor appears on the target's cards.*
+
+![More details](docs/img/more_details.png)
+*"More details" below the panel: target-track / separation / closest-so-far tiles, coverage, allegiance, MAVLink feed health,
+predicted miss and the track-change log.*
+
+![Replay of a saved flight](docs/img/replay_0917_flight2.png)
+*Replaying a flight saved from a live run (9/17 flight 2): the sidebar carries the replay transport, time slider and the
+airborne-trimmed window; "INT NO TRACK" while the interceptor sits on the pad.*
+
+![Data source page](docs/img/data_source_page.png)
+*Data source page: Live radar unit (MRU number → Mongo host by convention, 8 s probe, Advanced for custom host / patterns) or
+Archive replay (built-in day and saved flights). The address of the unit is blurred here.*
+
+![Data source page, archive replay](docs/img/data_source_archive.png)
+*Archive replay mode: pick the built-in day's flights or any flight saved from a live run; roles come from the save's meta.json.*
+
+### How it fits together
+
+```mermaid
+flowchart LR
+  subgraph unit["MRU unit"]
+    M[("Mongo run collection<br/>tracks · MAVLink truth · obs")]
+  end
+  subgraph host["dashboard host"]
+    F["ih.feed<br/>12 s chunks, truth $filter"] --> EN["ih.engine<br/>correlate · grade · CPA · states"]
+    EN --> PL["ih.plots<br/>Plotly figures"]
+    PL --> LS["ih.liveserver<br/>panel data server :8902<br/>figs.json + plotly.min.js"]
+    ST["Streamlit :8901<br/>Data source · Live pages"] -->|"tick"| F
+    AR["ih.archive<br/>save + airborne audit"] --> D[("archive CSVs<br/>flights.json")]
+    D -->|"replay"| EN
+  end
+  subgraph browser["browser"]
+    P["one-screen panel iframe<br/>polls figs.json, DOM overlay for icons"]
+    MC["measurement-space iframes<br/>(target · interceptor)"]
+  end
+  M -->|"pymongo, 8 s timeouts"| F
+  ST -->|"page + iframes"| P
+  LS -->|"HTTP"| P
+  LS -->|"HTTP"| MC
+  ST -->|"Save data to archive"| AR
+```
+
+Streamlit renders the pages and runs the engine tick; the browser's panel iframe polls the panel data server for figure
+updates and moves the vehicle icons itself, so nothing re-renders on each tick except what changed. Archive replay feeds the
+same engine from CSVs.
+
 ### Reading the figures
 
 * **Interceptor radar track** appears on the top-down map (blue dashed, "#id" pill, "INT #id STATE" tag) and on its
