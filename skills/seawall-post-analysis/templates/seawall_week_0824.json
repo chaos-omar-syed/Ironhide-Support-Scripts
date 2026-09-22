@@ -1,7 +1,7 @@
 {
  "title": "Seawall Week of 8-24 \u2014 Campaign Report",
  "sub": "MRU91 \u00b7 2026-08-25 \u2192 08-28 \u00b7 standard post-process pipeline: per-day reports from the two canonical modules, stitched into this rollup",
- "out_root": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/seawall_week_report",
+ "out_root": "/home/omar.syed/Test_Environment/ironhide/seawall/reports/seawall_week_report",
  "rollup_html": "<h4>The week in one arc</h4><p>The week reads as one arc: <b>fix the pointing, then fight the association.</b> 8/25 proved the \u22122.2\u00b0 azimuth bias made the target untrackable everywhere it flew. The overnight yaw-offset fix landed; 8/26 measured the \u22121.45\u00b0 residual and showed the radar is a 22\u201327 m sensor once that is corrected \u2014 while tracks fragmented (12 ids/flight) against continuous detections. 8/27 moved to engagements and exposed the close-pass regime: error inflating exactly at endgame, one guidance dash flown inside a track handover gap, and no target track during the killing dive. 8/28 delivered the week's engagements \u2014 21 m and 32 m \u00d72 at up to 99.8% coverage with the cal holding below the 1\u00b0 reporting bar \u2014 and matured the close-pass problem into identity corruption: three track steals at the crossings.</p>",
  "days": [
   {
@@ -10,7 +10,7 @@
    "type": "tracking",
    "sub": "run 707ccda9 \u00b7 pre-cal",
    "prep": {
-    "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-25/707ccda9",
+    "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-25/707ccda9",
     "target_pattern": "mav14551_2_2.csv",
     "ant_hae_m": 141.76,
     "flights_pdt": [
@@ -25,7 +25,7 @@
       "14:56:24"
      ]
     ],
-    "out_mdir": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-25/mission_prepped"
+    "out_mdir": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-25/mission_prepped"
    },
    "init": {
     "day": [
@@ -52,7 +52,7 @@
    "title": "8/26 \u2014 Tracking (2 flights \u00d7 2 laps)",
    "type": "tracking",
    "sub": "run 9b22a989",
-   "mdir": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/mission_20260826",
+   "mdir": "/home/omar.syed/Test_Environment/ironhide/seawall/reports/mission_20260826",
    "notes_html": "<p><b>Key message: cal applied \u2014 the residual azimuth bias is measured, small, and explains most of the remaining error.</b> Post-cal az <b>\u22121.45\u00b0</b> (el +0.5\u00b0, alt +21 m). Raw 65\u201368 m horizontal error collapses to <b>22\u201327 m</b> with the residual corrected offline \u2014 accuracy is calibration-limited, not sensor-limited. Continuity is the other story: 12 track ids per flight and 6 turn handovers against continuous ~2 det/s \u2014 association-limited, the thread that runs through the engagement days.</p>",
    "flight_keys": [
     "F1R1",
@@ -77,7 +77,7 @@
    "engagements": [
     {
      "name": "8/27 Engagement 1 (09:51:28 PDT)",
-     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-27/214a1a56",
+     "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-27/214a1a56",
      "interceptor_pattern": "mav14551_2_*.csv",
      "target": {
       "pattern": "mav14550_1_1.csv"
@@ -93,19 +93,19 @@
      "post_html": "",
      "tab_label": "Engagement 1",
      "fov": {
-      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/Zeus/log_9_2026-8-26-23-53-02.ulg",
+      "ulog": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/8_27_flightlogs/Zeus/log_9_2026-8-26-23-53-02.ulg",
       "zoff": 36002.0,
-      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/Camera/raw_camera_20260826_234538.mkv",
-      "camwarp": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/cache/camwarp_eng1.npz",
+      "video": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/8_27_flightlogs/Camera/raw_camera_20260826_234538.mkv",
+      "camwarp": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/8_27_flightlogs/cache/camwarp_eng1.npz",
       "target_label": "mav14550 truth feed"
      }
     },
     {
      "name": "8/27 Engagement 2 (10:28:03 PDT)",
-     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-27/214a1a56",
+     "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-27/214a1a56",
      "interceptor_pattern": "mav14551_2_*.csv",
      "target": {
-      "traj_csv": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/csv/log_62_2026-8-27-10-36-08_traj.csv"
+      "traj_csv": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/8_27_flightlogs/csv/log_62_2026-8-27-10-36-08_traj.csv"
      },
      "window_pdt": [
       "10:24:57",
@@ -118,10 +118,10 @@
      "post_html": "",
      "tab_label": "Engagement 2",
      "fov": {
-      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/Zeus/log_10_2026-8-27-00-31-14.ulg",
+      "ulog": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/8_27_flightlogs/Zeus/log_10_2026-8-27-00-31-14.ulg",
       "zoff": 36002.0,
-      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/Camera/raw_camera_20260827_002402.mkv",
-      "camwarp": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/8_27_flightlogs/cache/camwarp_eng2.npz",
+      "video": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/8_27_flightlogs/Camera/raw_camera_20260827_002402.mkv",
+      "camwarp": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/8_27_flightlogs/cache/camwarp_eng2.npz",
       "target_label": "Fox onboard GPS (log_62)"
      }
     }
@@ -143,7 +143,7 @@
    "engagements": [
     {
      "name": "8/28 Flight 1 \u2014 pass 3 (07:23:47 PDT)",
-     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
+     "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
      "interceptor_pattern": "mav14551_2_*.csv",
      "target": {
       "pattern": "mav14550_1_1.csv"
@@ -159,9 +159,9 @@
      "post_html": "",
      "tab_label": "Flight 1",
      "fov": {
-      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0012*.ulg",
+      "ulog": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0012*.ulg",
       "zoff": 36001.3,
-      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_211914.mkv",
+      "video": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_211914.mkv",
       "cam": {
        "fps": 15.37,
        "onset_frame": 960
@@ -171,7 +171,7 @@
     },
     {
      "name": "8/28 Flight 2 \u2014 pass 2 (07:59:04 PDT)",
-     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
+     "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
      "interceptor_pattern": "mav14551_2_*.csv",
      "target": {
       "pattern": "mav14550_1_1.csv"
@@ -187,9 +187,9 @@
      "post_html": "",
      "tab_label": "Flight 2",
      "fov": {
-      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0013*.ulg",
+      "ulog": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0013*.ulg",
       "zoff": 36001.8,
-      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_215643.mkv",
+      "video": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_215643.mkv",
       "cam": {
        "fps": 16.2,
        "onset_frame": 920
@@ -199,7 +199,7 @@
     },
     {
      "name": "8/28 Flight 3 \u2014 pass 7 (08:20:28 PDT)",
-     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
+     "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
      "interceptor_pattern": "mav14551_2_*.csv",
      "target": {
       "pattern": "mav14550_1_1.csv"
@@ -215,9 +215,9 @@
      "post_html": "",
      "tab_label": "Flight 3",
      "fov": {
-      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0014*.ulg",
+      "ulog": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0014*.ulg",
       "zoff": 36001.7,
-      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_221542.mkv",
+      "video": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_221542.mkv",
       "cam": {
        "fps": 15.459,
        "onset_frame": 240
@@ -227,7 +227,7 @@
     },
     {
      "name": "8/28 Flight 4 \u2014 pass 5 (08:38:56 PDT)",
-     "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump",
+     "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump",
      "interceptor_pattern": "mav14551_2_*.csv",
      "target": {
       "pattern": "mav14550_1_1.csv"
@@ -243,9 +243,9 @@
      "post_html": "",
      "tab_label": "Flight 4",
      "fov": {
-      "ulog": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0015*.ulg",
+      "ulog": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Logs/Jetson/LOG0015*.ulg",
       "zoff": 36001.3,
-      "video": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_223455.mkv",
+      "video": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/flight_logs/8_28_flightlogs/Zeus3/Media/raw_camera_20260827_223455.mkv",
       "cam": {
        "fps": 15.75,
        "onset_frame": 136
@@ -274,21 +274,21 @@
    {
     "label": "8/26",
     "dirs": [
-     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-26/9b22a989"
+     "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-26/9b22a989"
     ]
    },
    {
     "label": "8/27",
     "dirs": [
-     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-27/214a1a56"
+     "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-27/214a1a56"
     ]
    },
    {
     "label": "8/28",
     "dirs": [
-     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
-     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
-     "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump"
+     "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
+     "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flights23_quickdump",
+     "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump"
     ]
    }
   ],
@@ -341,7 +341,7 @@
   "steal_views": [
    {
     "label": "Track steal \u2014 trk 177 \u00b7 run e65bd4f9 \u00b7 8/28 Flight 1, pass 3 (07:23:47 PDT)",
-    "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
+    "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flight1_quickdump",
     "date": "2026-08-28",
     "t_steal_pdt": "07:23:47",
     "track_id": 177,
@@ -354,7 +354,7 @@
    },
    {
     "label": "Track steal \u2014 trk 1551 \u00b7 run e65bd4f9 \u00b7 8/28 Flight 4, pass 6 (08:40:04 PDT)",
-    "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump",
+    "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9_flight4_quickdump",
     "date": "2026-08-28",
     "t_steal_pdt": "08:40:04",
     "track_id": 1551,
@@ -370,7 +370,7 @@
   "corruption_views": [
    {
     "label": "Track corruption \u2014 trk 633 \u00b7 run 214a1a56 \u00b7 8/27 Engagement 1 (09:51:28 PDT)",
-    "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-27/214a1a56",
+    "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-27/214a1a56",
     "date": "2026-08-27",
     "t_steal_pdt": "09:51:28",
     "track_id": 633,
@@ -386,13 +386,13 @@
    }
   ],
   "az_bias_example": {
-   "mdir": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/mission_20260826",
+   "mdir": "/home/omar.syed/Test_Environment/ironhide/seawall/reports/mission_20260826",
    "flight": 1,
    "run": 2,
    "caption_html": "Before / after the bias correction \u2014 run 9b22a989 (Turquoise_Emu), 8/26 Flight 1 \u00b7 Lap 2, straight from the day report: LEFT = RAW, as the radar reports (tracks sit rotated off the truth); RIGHT = the same window rotated by the measured \u22121.45\u00b0 residual (alignment check only \u2014 no correction is applied in the radar), the tracks fall onto the truth line."
   },
   "turn_zoom": {
-   "dump": "/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-26/9b22a989",
+   "dump": "/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-26/9b22a989",
    "date": "2026-08-26",
    "t_pdt": "08:46:41",
    "tracks": [

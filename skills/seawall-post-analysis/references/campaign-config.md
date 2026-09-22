@@ -239,7 +239,7 @@ Grep basis: `omar.syed|MRU91|hours=-7|Los_Angeles|2026-08|707ccda9|9b22a989|214a
 
 ### MRU / host / run ids
 - `quickdump.DEFAULT_HOST = "10.191.28.205"`, `DEFAULT_RUN = "run_e65bd4f92a9a4d6aa883c5f9d896a6ca"` — pass `--mru NN` (→ `10.1NN.28.205`, `ih.feed.MRU_HOST_FMT`) or `--host`, and always `--run`.
-- `ih.data.ARCHIVE_ROOT` default `/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_9-14` (env `IH_ARCHIVE_ROOT`; quickdump `--root`).
+- `ih.data.ARCHIVE_ROOT` default `/home/omar.syed/Test_Environment/ironhide/seawall/2026-09-14_week` (env `IH_ARCHIVE_ROOT`; quickdump `--root`).
 - `postprocess_report.ensure_dump()` passes none of `--host/--run/--day/--root` → the `mongo` day input always dumps MRU91/e65bd4f9/today.
 - `tracking_tab.init_mission` legacy branch: run 9b22a989 track ids and 08:35–09:18 windows; `DEFAULT_TITLE/SUB` "MRU91 Mission Report 2026-08-26"; Summary `<h2>` "Mission rollup — 2026-08-26, MRU91 run Turquoise_Emu, drone mav14550_1_1" (unconditional); default `notes_html` = the 8/26 findings.
 - `toxic_zones.DAYS` / `OUTDIR` (8/25, 8/28 MRU91 dirs under `VP_TrackAnalysis/mru91_track2895/toxic_zones_0828`) — only for its own CLI, not used by the pipeline.
@@ -258,10 +258,10 @@ Grep basis: `omar.syed|MRU91|hours=-7|Los_Angeles|2026-08|707ccda9|9b22a989|214a
 - ffmpeg: `engagement_tab.ffmpeg_bin()` = `$SEAWALL_FFMPEG` → `PATH` → `<interpreter dir>/ffmpeg` (sensorenv) → the legacy absolute path.
   Checked BEFORE any render; none found → the FOV block alone is replaced by an "unavailable" note (tab builds). A cached
   `figs/fov_<video>.mp4` never needs ffmpeg.
-- `quickdump.py` sys.path: `<TE>/Seawall_Ironhide_Testing/ironhide_dashboard`, `<TE>/ironhide_dashboard`, `<TE>/chaos-spa/src` — today `ih` resolves to `/home/omar.syed/Test_Environment/ironhide_dashboard/ih/` (a sibling copy of `ironhide_dashboard_served/ih/`; `archive.py` and `data.py` are byte-identical in both).
+- `quickdump.py` sys.path: `<TE>/Seawall_Ironhide_Testing/ironhide_dashboard`, `<TE>/ironhide_dashboard`, `<TE>/chaos-spa/src` — today `ih` resolves to `/home/omar.syed/Test_Environment/ironhide/dashboard/ih/` (a sibling copy of `ironhide_dashboard_served/ih/`; `archive.py` and `data.py` are byte-identical in both).
 - `toxic_zones.PLOTLY_JS = track_correlation/plotly.min.js` (own CLI only). The pipeline pages inline plotly via `pyo.get_plotlyjs()` (`engagement_tab.wrap_tabs`) — ~4.6 MB per page, no external file needed. (`tracking_tab.wrap_page` references `plotly.min.js` relatively but is NOT used by the pipeline.)
 - Satellite imagery: `live_correlator._satmap_payload` → `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}`, needs outbound HTTPS; falls back to a plain dark background.
-- Serving: `python3 -m http.server 8899 --bind 0.0.0.0` has been running in `/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895` since Aug 25 (pid 3002821). `server_base` in the 8/24 config is `http://172.18.1.28:8899/seawall_week_report` = that root + the `out_root` basename. A new campaign's `out_root` must be a sub-directory of that served root (or a symlink into it — `Seawall_Week_of_9-14/reports/` is meant to hold such symlinks).
+- Serving: `python3 -m http.server 8899 --bind 0.0.0.0` has been running in `/home/omar.syed/Test_Environment/ironhide/seawall/reports` since Aug 25 (pid 3002821). `server_base` in the 8/24 config is `http://172.18.1.28:8899/seawall_week_report` = that root + the `out_root` basename. A new campaign's `out_root` must be a sub-directory of that served root (or a symlink into it — `Seawall_Week_of_9-14/reports/` is meant to hold such symlinks).
 
 ### Physics/gating constants (constants, but know they exist)
 - tracking: `AGL_MIN = 20 m` truth clamp, `max_horiz = 350 m` coast mask, seeker standoffs `600/450/300/150 m`, 12° FOV, obs match ±0.06 rad az / 300 m range / 3° el.

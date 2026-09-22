@@ -3,7 +3,7 @@
  "_comment_placeholders": {
   "<MRU>": "unit number, e.g. 91 (mongo host 10.1<MRU>.28.205)",
   "<CAMPAIGN>": "short slug for the report dir, e.g. seawall_week_0914",
-  "<WEEK_ROOT>": "archive root, e.g. /home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_9-14",
+  "<WEEK_ROOT>": "archive root, e.g. /home/omar.syed/Test_Environment/ironhide/seawall/2026-09-14_week",
   "<DATE1>/<DATE2>": "YYYY-MM-DD of the tracking / engagement day (day ids MUST be dates for the standalone link rewrite)",
   "<RUN8_A>/<RUN8_B>": "first 8 hex of the run collection for each day",
   "<DUMP_DIR_A>/<DUMP_DIR_B>": "dump dirs written by scripts/dump_run_window.py (<root>/<YYYY-MM-DD>/<run8>_<label>/ with mavlink/, tracks/, meta.json; old quickdump / archiver dumps are still readable). Instead of a 'dump' path any day / prep / engagement / radar_rollup day may carry a 'mongo' spec (see _comment_mongo) and the pipeline dumps it first.",
@@ -17,7 +17,7 @@
  },
  "title": "Seawall Week of <M-DD> — Campaign Report",
  "sub": "MRU<MRU> · <DATE1> → <DATE2> · standard post-process pipeline: per-day reports from the two canonical modules, stitched into this rollup",
- "out_root": "/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895/<CAMPAIGN>_report",
+ "out_root": "/home/omar.syed/Test_Environment/ironhide/seawall/reports/<CAMPAIGN>_report",
  "server_base": "http://172.18.1.28:8899/<CAMPAIGN>_report",
  "tz": "<TZ>",
  "_comment_tz": "IANA zone for EVERY clock string in this file (flights_pdt, window_pdt, cpa_seed_pdt, t_steal_pdt, t_pdt) and for every printed time; DST-aware. Default when absent: America/Los_Angeles.",
