@@ -3,7 +3,7 @@
 
     python aoa_bias_correct.py --mru 43 --run 6aecec5e --jobs 100-400          # live mongo
     python aoa_bias_correct.py --mru 91 --run Turquoise_Emu --jobs 2500-2900 --target 14550
-    python aoa_bias_correct.py --archive /home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-26/9b22a989 \
+    python aoa_bias_correct.py --archive /home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-26/9b22a989 \
                                --t0 "2026-08-26 08:35" --t1 "2026-08-26 08:53"    # offline CSV archive
 
 Pipeline:

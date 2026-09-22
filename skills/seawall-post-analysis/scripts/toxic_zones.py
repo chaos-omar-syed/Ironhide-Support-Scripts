@@ -22,7 +22,7 @@ Satellite underlay via live_correlator._satmap_payload (Esri tiles); page
 falls back to a plain background offline.
 
 Run (sensorenv python):
-  PYTHONPATH=/home/omar.syed/Test_Environment/track_correlation \
+  PYTHONPATH=/home/omar.syed/Test_Environment/ironhide/track_correlation \
   /home/omar.syed/.local/share/mamba/envs/sensorenv/bin/python toxic_zones.py
 
 Re-run after later flights by adding a day spec to DAYS below (or pass
@@ -63,12 +63,12 @@ TELEPORT_MPS = 250.0       # implied truth speed above this = GPS teleport, drop
 
 DAYS = [
     dict(label="2026-08-28 · run e65bd4f9 (Beige_Badger)", short="0828",
-         dir="/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-28/e65bd4f9"),
+         dir="/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-28/e65bd4f9"),
     dict(label="2026-08-25 · run 707ccda9 (Crimson_Panda)", short="0825",
-         dir="/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_8-24/seawall_0824_data/2026-08-25/707ccda9"),
+         dir="/home/omar.syed/Test_Environment/ironhide/seawall/2026-08-24_week/seawall_0824_data/2026-08-25/707ccda9"),
 ]
 
-OUTDIR = ("/home/omar.syed/Test_Environment/VP_TrackAnalysis/"
+OUTDIR = ("/home/omar.syed/Test_Environment/vanquish_prime/seawall/2026-08-05_mru70_star_pattern_tracks/"
           "mru91_track2895/toxic_zones_0828")
 PLOTLY_JS = os.path.join(HERE, "plotly.min.js")
 

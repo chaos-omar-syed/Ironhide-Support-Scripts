@@ -14,9 +14,9 @@ Alternatively `PY=/home/omar.syed/.local/share/mamba/envs/sensorenv/bin/python`.
 
 Paths used below:
 
-    TC=/home/omar.syed/Test_Environment/Ironhide-Support-Scripts/skills/seawall-post-analysis/scripts   # the pipeline
-    WEEK=/home/omar.syed/Test_Environment/Seawall_Ironhide_Testing/Seawall_Week_of_<M-DD>   # archive root for the campaign
-    SERVED=/home/omar.syed/Test_Environment/VP_TrackAnalysis/mru91_track2895              # http.server :8899 root
+    TC=/home/omar.syed/Test_Environment/ironhide/Ironhide-Support-Scripts/skills/seawall-post-analysis/scripts   # the pipeline
+    WEEK=/home/omar.syed/Test_Environment/ironhide/seawall/Seawall_Week_of_<M-DD>   # archive root for the campaign
+    SERVED=/home/omar.syed/Test_Environment/ironhide/seawall/reports              # http.server :8899 root
 
 ---
 
@@ -171,7 +171,7 @@ renders an "unavailable" note; the rest of the tab is untouched. Cached `figs/fo
 Background run (agent shells reset cwd between calls — put the `cd` inside the command, use absolute paths):
 
 ```bash
-nohup bash -c 'cd /home/omar.syed/Test_Environment/track_correlation && micromamba run -n sensorenv python postprocess_report.py /abs/<campaign>.json' \
+nohup bash -c 'cd /home/omar.syed/Test_Environment/ironhide/track_correlation && micromamba run -n sensorenv python postprocess_report.py /abs/<campaign>.json' \
     > /abs/<campaign>_build.log 2>&1 &
 echo $!            # keep the pid; kill with `kill <pid>` — NOT `pkill -f postprocess_report` (see §5)
 tail -f /abs/<campaign>_build.log
