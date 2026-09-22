@@ -376,7 +376,7 @@ def test_deep_link_query_params_seek_flight_and_preset():
     assert "08:20:23" in _status(_md(at))
     at.run()                                                                                   # applied once: a later rerun does not re-seek
     assert abs(at.session_state["anchor_t"] - D.hms_to_epoch("08:20:23")) < 1.0
-    bad = _at(APP, live_page=False); bad.query_params["t"] = "garbage"; bad.query_params["flight"] = "9"; bad.run()
+    bad = _at(APP, live_page=False); bad.query_params["t"] = "garbage"; bad.query_params["flight"] = "999"; bad.run()   # 999: never a real flight (9 became one when the 9/14 week archive root is set)
     assert not _exc(bad), _exc(bad)
     bad.switch_page("views/1_live.py").run()
     _clean(bad, "bad deep link")

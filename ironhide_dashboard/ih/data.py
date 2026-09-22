@@ -984,7 +984,11 @@ def apply_query_params() -> None:
             s["flight"] = int(fl)
             seek(replay_bounds(int(fl))[0], keep_playing=False)
         if t:
-            seek(hms_to_epoch(str(t).strip()), keep_playing=str(play_ or "").lower() in ("1", "true", "yes"))
+            # 2026-09-22: the HH:MM:SS is a PDT clock on the FLIGHT'S OWN DAY (a saved 9/17 flight used to resolve against the
+            # built-in 8/28 day, so every shared link landed at the window start)
+            n = s.get("flight")
+            day = str((flight_info(int(n)).get("day") if n is not None and int(n) in FLIGHT_WINDOWS else None) or DAY)
+            seek(hms_to_epoch(str(t).strip(), day), keep_playing=str(play_ or "").lower() in ("1", "true", "yes"))
     except (ValueError, TypeError):
         pass
 
