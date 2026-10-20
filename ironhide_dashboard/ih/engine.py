@@ -1372,6 +1372,7 @@ def analyze(snap: dict, params: dict) -> dict:
     # chaos-spa graded errors over the rolling window (antenna LLA from the snapshot:
     # archive bundle constants or the live run's TRACKS-derived origin)
     A["ant"] = tuple(snap.get("ant") or (D.ANT_LAT, D.ANT_LON, D.ANT_HAE))
+    A["tx"] = tuple(snap["tx"]) if snap.get("tx") else None   # Tx LLA (None = co-located) -> bistatic blind-zone oval on the map
     win = max(W, ERR_PANEL_S)
     A["errors"] = _windowed_errors(s, A["tgt_track"], Tt, A["ant"], t_now, win, tid)
     # second target-side track inside the gate (handover / duplicate): graded for the error PANEL only

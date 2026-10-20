@@ -393,18 +393,28 @@ def downsample(tr: np.ndarray, max_hz: float = TRAIL_MAX_HZ) -> np.ndarray:
 
 @st.cache_data(show_spinner=False)
 def blind_rings() -> list[tuple[str, float]]:
+    """[(mode label(s), pulse width s)] for DEFAULT_MODES, coincident pulse widths joined."""
     try:
-        from blindzone_map import DEFAULT_MODES, blind_radius_m, load_modes
+        from blindzone_map import DEFAULT_MODES, load_modes
 
         lib = load_modes()
-        # dedupe coincident radii (e.g. adv_medium == adv_long at 40 µs): one ring, joined label
-        by_r: dict[int, list[str]] = {}
+        by_pw: dict[float, list[str]] = {}
         for m in DEFAULT_MODES:
             if m in lib:
-                by_r.setdefault(int(round(blind_radius_m(lib[m]))), []).append(m)
-        return sorted(((" / ".join(ms), float(r)) for r, ms in by_r.items()), key=lambda x: x[1])
+                by_pw.setdefault(round(float(lib[m]), 9), []).append(m)
+        return sorted(((" / ".join(ms), pw) for pw, ms in by_pw.items()), key=lambda x: x[1])
     except Exception:
         return []
+
+
+def _tx_en(A: dict):
+    """(E, N) m of the Tx about the Rx origin, or None when co-located / unknown."""
+    tx, ant = A.get("tx"), A.get("ant")
+    if not tx or not ant:
+        return None
+    e = (float(tx[1]) - float(ant[1])) * np.cos(np.radians(float(ant[0]))) * 111320.0
+    n = (float(tx[0]) - float(ant[0])) * 110574.0
+    return None if np.hypot(e, n) < 5.0 else (e, n)
 
 
 def _circle(r: float, n: int = 121):
@@ -565,12 +575,25 @@ def map_fig(A: dict, P: dict) -> go.Figure:
             fig.add_layout_image(dict(source=r["img"], xref="x", yref="y", x=r["x0"], y=r["y1"], sizex=r["x1"] - r["x0"],
                                       sizey=r["y1"] - r["y0"], xanchor="left", yanchor="top", sizing="stretch", layer="below", opacity=SAT_OPACITY))
     if P.get("show_blind"):
-        rings = blind_rings()
-        for i, (m, rad) in enumerate(rings):
-            x, y = _circle(rad)
-            fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(color=T.FAIL, width=1, dash="dot"), opacity=0.8, name="blind zone (c·pw/2)",
-                                     legendgroup="blind", showlegend=(i == 0), hovertemplate=f"{m}<br>blind radius {rad:.0f} m<extra></extra>"))
-            fig.add_annotation(x=0, y=rad, text=f"{rad/1000:.2f} km", showarrow=False, yanchor="bottom", font=dict(size=10, color=T.INK2, family=T.MONO))
+        # Bistatic blind zone (Seawall AAR 2026-10-20): echo lost while Tx->tgt->Rx path < baseline + c*pw -> an oval with
+        # Tx and Rx as foci (c*pw/2 past each node); a c*pw/2 circle about the radar only when the Tx is co-located.
+        try:
+            from blindzone_map import blind_zone_xy
+            rings = blind_rings()
+        except ImportError:
+            rings = []
+        txe = _tx_en(A)
+        for i, (m, pw) in enumerate(rings):
+            x, y = blind_zone_xy(pw, txe)
+            pad = 299_792_458.0 * pw / 2.0
+            fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(color=T.FAIL, width=1, dash="dot"), opacity=0.8,
+                                     name="blind zone (Tx→tgt→Rx < baseline + c·pw)", legendgroup="blind", showlegend=(i == 0),
+                                     hovertemplate=f"{m}<br>pw {pw*1e6:.0f} µs · {pad:.0f} m past Rx/Tx<extra></extra>"))
+            fig.add_annotation(x=float(x[len(x) // 4]), y=float(y[len(y) // 4]), text=f"{pad/1000:.2f} km", showarrow=False, yanchor="bottom",
+                               font=dict(size=10, color=T.INK2, family=T.MONO))
+        if txe is not None and rings:
+            fig.add_trace(go.Scatter(x=[txe[0]], y=[txe[1]], mode="markers", name="Tx", marker=dict(symbol="square", size=9, color=T.CARD,
+                                     line=dict(width=2, color=T.INK)), hovertemplate="Tx<extra></extra>", showlegend=False))
         n_series += bool(rings)
     # radar origin: hollow ink ring + ink label
     # (marker only — the "RADAR" text clipped at the plot edge whenever the origin sat just outside the view; "I don't need to see
