@@ -90,7 +90,7 @@ import numpy as np
 import polars as pl
 import pymap3d as pm
 
-_SPA_SRC = "/home/omar.syed/Test_Environment/chaos-spa/src"
+_SPA_SRC = "/home/omar.syed/Test_Environment/repos/chaos-spa-gh/src"   # GitHub sensorco-global/chaos-spa (Bitbucket copy frozen 2026-09-01)
 try:  # honour an existing PYTHONPATH first
     import spa  # noqa: F401
 except ImportError:  # pragma: no cover

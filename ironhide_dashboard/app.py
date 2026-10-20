@@ -169,8 +169,8 @@ with st.sidebar:
                        "distance AND then separate again — so a launch or a pass that never gets close is not declared a CPA.")
         with st.expander("More controls", expanded=False):
             st.toggle("Satellite imagery", key="show_sat", help="Esri World Imagery under the map (cached tiles).")
-            st.toggle("Radar blind-range rings (pulse width)", key="show_blind",
-                      help="Dotted rings at the blind range c·(pulse width)/2 of each waveform mode: inside them the radar cannot detect.")
+            st.toggle("Radar blind zones (pulse width, bistatic)", key="show_blind",
+                      help="Dotted ovals per waveform mode: inside them the echo arrives while the direct Tx pulse still deafens the Rx (Tx→target→Rx path shorter than baseline + c·pulse width). Oval about Tx and Rx; a c·pw/2 circle when they are co-located.")
             st.toggle("Show uncorrelated radar tracks (ADS-B, clutter) while MAVLink truth is present", key="show_free_tracks",
                       help="Off: only tracks correlated to a MAVLink drone draw while truth is present (uncorrelated tracks always draw when there is no truth at all).")
             st.toggle("Show raw radar detections on error plots", key="show_obs",
